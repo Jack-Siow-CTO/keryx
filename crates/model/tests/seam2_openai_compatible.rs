@@ -58,7 +58,7 @@ async fn openai_fixture_shapes_request_and_parses_stream_deltas() {
     let body: serde_json::Value = serde_json::from_slice(&requests[0].body).unwrap();
     assert_eq!(body["model"], "gpt-test");
     assert_eq!(body["stream"], true);
-    assert!(body["messages"].as_array().unwrap().len() >= 1);
+    assert!(!body["messages"].as_array().unwrap().is_empty());
 }
 
 #[tokio::test]
