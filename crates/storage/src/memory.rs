@@ -1,6 +1,6 @@
 use async_trait::async_trait;
 use keryx_app::SessionStore;
-use keryx_domain::{Run, RunId, Session, SessionId};
+use keryx_domain::{Run, RunId, RunStatus, Session, SessionId, Transcript, TranscriptMessage};
 use std::collections::HashMap;
 use std::sync::Mutex;
 
@@ -9,6 +9,7 @@ use std::sync::Mutex;
 pub struct InMemorySessionStore {
     sessions: Mutex<HashMap<SessionId, Session>>,
     runs: Mutex<HashMap<RunId, Run>>,
+    transcripts: Mutex<HashMap<SessionId, Vec<TranscriptMessage>>>,
 }
 
 impl InMemorySessionStore {
@@ -59,5 +60,35 @@ impl SessionStore for InMemorySessionStore {
     async fn count_runs(&self) -> Result<usize, String> {
         let runs = self.runs.lock().map_err(|e| e.to_string())?;
         Ok(runs.len())
+    }
+
+    async fn get_transcript(&self, session_id: SessionId) -> Result<Transcript, String> {
+        let transcripts = self.transcripts.lock().map_err(|e| e.to_string())?;
+        Ok(Transcript {
+            session_id: Some(session_id),
+            messages: transcripts.get(&session_id).cloned().unwrap_or_default(),
+        })
+    }
+
+    async fn append_transcript(
+        &self,
+        session_id: SessionId,
+        message: TranscriptMessage,
+    ) -> Result<(), String> {
+        let mut transcripts = self.transcripts.lock().map_err(|e| e.to_string())?;
+        transcripts.entry(session_id).or_default().push(message);
+        Ok(())
+    }
+
+    async fn interrupt_active_runs(&self) -> Result<usize, String> {
+        let mut runs = self.runs.lock().map_err(|e| e.to_string())?;
+        let mut count = 0;
+        for run in runs.values_mut() {
+            if run.status == RunStatus::Active {
+                run.interrupt();
+                count += 1;
+            }
+        }
+        Ok(count)
     }
 }

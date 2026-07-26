@@ -114,6 +114,11 @@ impl ModelProvider for FakeModelProvider {
             return Ok(response);
         }
 
-        Ok(ModelResponse::text(format!("fake-model: {}", request.goal)))
+        // Default greeting includes transcript length so multi-turn Seam 1 tests can observe continuity.
+        Ok(ModelResponse::text(format!(
+            "fake-model: goal={} transcript_msgs={}",
+            request.goal,
+            request.transcript.len()
+        )))
     }
 }

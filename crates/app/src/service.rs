@@ -5,7 +5,9 @@ use crate::model::{ModelProvider, ModelRequest};
 use crate::registry::ActiveRunRegistry;
 use crate::store::SessionStore;
 use async_trait::async_trait;
-use keryx_domain::{Principal, Run, RunEvent, RunEventKind, RunId, RunStatus, Session, SessionId};
+use keryx_domain::{
+    Principal, Run, RunEvent, RunEventKind, RunId, RunStatus, Session, SessionId, TranscriptMessage,
+};
 use std::sync::Arc;
 use tokio::sync::{broadcast, Mutex};
 use tokio::time::timeout;
@@ -269,7 +271,14 @@ where
 
     publish(RunEventKind::ModelStarted)?;
 
-    let model_future = model.complete(ModelRequest { goal });
+    let transcript = store
+        .get_transcript(session_id)
+        .await
+        .map_err(AppError::Store)?;
+    let model_future = model.complete(ModelRequest {
+        goal: goal.clone(),
+        transcript: transcript.messages,
+    });
     let model_result = if let Some(max_duration) = budgets.max_duration {
         tokio::select! {
             () = cancel.cancelled() => {
@@ -413,6 +422,19 @@ where
                 publish(RunEventKind::ToolStarted { name: name.clone() })?;
                 publish(RunEventKind::ToolFinished { name })?;
             }
+
+            // Durable conversational truth: append goal + answer to Session Transcript.
+            store
+                .append_transcript(session_id, TranscriptMessage::user(goal))
+                .await
+                .map_err(AppError::Store)?;
+            store
+                .append_transcript(
+                    session_id,
+                    TranscriptMessage::assistant(response.content.clone()),
+                )
+                .await
+                .map_err(AppError::Store)?;
 
             run.complete(response.content);
             finalize_run(

@@ -1,8 +1,10 @@
-//! Keryx storage adapter (`SQLite` later; in-memory for Hello Run / Seam 1).
+//! Keryx storage adapter (`SQLite` durability + in-memory for fast Seam 1 tests).
 
 mod memory;
+mod sqlite;
 
 pub use memory::InMemorySessionStore;
+pub use sqlite::SqliteSessionStore;
 
 /// Workspace smoke: storage adapter is loadable.
 #[must_use]

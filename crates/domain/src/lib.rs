@@ -7,12 +7,14 @@ mod ids;
 mod principal;
 mod run;
 mod session;
+mod transcript;
 
 pub use events::{RunEvent, RunEventKind};
 pub use ids::{RunId, SessionId};
 pub use principal::{Principal, PrincipalId};
 pub use run::{Run, RunStatus};
 pub use session::Session;
+pub use transcript::{MessageRole, Transcript, TranscriptMessage};
 
 /// Workspace smoke: domain crate is loadable.
 #[must_use]

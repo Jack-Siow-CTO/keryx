@@ -1,10 +1,12 @@
 use async_trait::async_trait;
+use keryx_domain::TranscriptMessage;
 use thiserror::Error;
 
 /// Request sent to a Model provider for one agent-loop step.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ModelRequest {
     pub goal: String,
+    pub transcript: Vec<TranscriptMessage>,
 }
 
 /// Completion returned by a Model provider.
