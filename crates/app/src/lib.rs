@@ -3,11 +3,13 @@
 //! Depends on domain ports/types only—not concrete adapters (ADR 0008).
 
 mod error;
+mod events;
 mod model;
 mod service;
 mod store;
 
 pub use error::AppError;
+pub use events::RunEventHub;
 pub use model::{ModelError, ModelProvider, ModelRequest, ModelResponse};
 pub use service::{ControlPlane, ControlPlaneService};
 pub use store::SessionStore;

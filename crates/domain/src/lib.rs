@@ -2,11 +2,13 @@
 //!
 //! This crate has no I/O, HTTP, `SQLite`, or provider SDKs (ADR 0008).
 
+mod events;
 mod ids;
 mod principal;
 mod run;
 mod session;
 
+pub use events::{RunEvent, RunEventKind};
 pub use ids::{RunId, SessionId};
 pub use principal::{Principal, PrincipalId};
 pub use run::{Run, RunStatus};

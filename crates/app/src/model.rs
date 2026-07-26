@@ -8,9 +8,28 @@ pub struct ModelRequest {
 }
 
 /// Completion returned by a Model provider.
+///
+/// `deltas` are optional token/text chunks for SSE `model.delta` events; `content` is the full answer.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ModelResponse {
     pub content: String,
+    pub deltas: Vec<String>,
+}
+
+impl ModelResponse {
+    #[must_use]
+    pub fn text(content: impl Into<String>) -> Self {
+        Self {
+            content: content.into(),
+            deltas: Vec::new(),
+        }
+    }
+
+    #[must_use]
+    pub fn with_deltas(deltas: Vec<String>) -> Self {
+        let content = deltas.concat();
+        Self { content, deltas }
+    }
 }
 
 /// Failures from a Model provider adapter.

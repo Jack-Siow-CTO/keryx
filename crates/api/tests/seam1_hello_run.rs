@@ -11,6 +11,7 @@ use keryx_model::FakeModelProvider;
 use keryx_storage::InMemorySessionStore;
 use serde_json::{json, Value};
 use std::sync::Arc;
+use std::time::Duration;
 use tower::ServiceExt;
 
 const TOKEN: &str = "test-operator-token";
@@ -35,6 +36,29 @@ async fn body_json(response: axum::response::Response) -> Value {
         .expect("body")
         .to_bytes();
     serde_json::from_slice(&bytes).expect("json body")
+}
+
+async fn wait_run_completed(app: &axum::Router, run_id: &str) -> Value {
+    for _ in 0..100 {
+        let get = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/v1/runs/{run_id}"))
+                    .header("authorization", format!("Bearer {TOKEN}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(get.status(), StatusCode::OK);
+        let record = body_json(get).await;
+        if record["status"] != "active" {
+            return record;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    panic!("run {run_id} did not leave active status in time");
 }
 
 #[tokio::test]
@@ -140,22 +164,10 @@ async fn authenticated_hello_run_completes_with_fake_model_and_principal() {
     assert_eq!(run["session_id"], session_id);
     assert_eq!(run["principal_id"], PRINCIPAL);
     assert_eq!(run["goal"], "greet the operator");
-    assert_eq!(run["status"], "completed");
-    assert_eq!(run["result"], "hello from fake model");
+    assert_eq!(run["status"], "active");
     let run_id = run["id"].as_str().expect("run id");
 
-    let get = app
-        .oneshot(
-            Request::builder()
-                .uri(format!("/v1/runs/{run_id}"))
-                .header("authorization", format!("Bearer {TOKEN}"))
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(get.status(), StatusCode::OK);
-    let record = body_json(get).await;
+    let record = wait_run_completed(&app, run_id).await;
     assert_eq!(record["status"], "completed");
     assert_eq!(record["result"], "hello from fake model");
     assert_eq!(record["principal_id"], PRINCIPAL);
