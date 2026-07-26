@@ -176,9 +176,11 @@ These decisions encode ADRs 0001–0009 and the aligned grill session. Vocabular
 
 **v1 Model providers:**
 
-- **OpenAI** and **Grok (xAI)** first
-- Credentials = configured API access (subscription entitlements expressed as API keys/base URLs/model IDs), **not** browser-session scraping
-- Prefer a shared OpenAI-compatible HTTP client shape with provider-specific configuration
+- **OpenAI** and **Grok (xAI)** first via official **API keys** (shared OpenAI-compatible client shape where practical)
+- Optional **consumer web** adapters (ADR 0010): `openai_web` (ChatGPT web session) and `grok_web` (Grok web session) using **operator-supplied** cookies/access tokens from env/secret files
+- Provider selected per Run (`provider` field) or Worker default; web providers register only when secrets are present
+- **Not** Worker-driven browser login; web session secrets ≠ control-plane Principal; fail closed on expired sessions without echoing secrets
+- Prefer API keys for reliability; consumer web wire formats are unofficial and may break
 
 **v1 Tools:**
 
@@ -369,8 +371,9 @@ For this v1 spec, the following are explicitly out of scope:
 - First-party polished Mac/phone UI apps (API must enable them; shipping UI is separate)
 - iOS/Android store clients as deliverables of this spec
 - Billing, usage metering dashboards, multi-host orchestration
-- Using consumer web session cookies instead of API credentials for OpenAI/Grok
+- Worker-embedded browser login / CAPTCHA / automatic interactive session refresh for consumer sites
 - LLM qualitative eval harness as a merge requirement
+- Guaranteeing stability or ToS compliance of unofficial consumer web endpoints (operator-owned risk; see ADR 0010)
 
 ---
 
@@ -435,3 +438,4 @@ Keryx is **Hermes-inspired**, not a line-by-line port of any single upstream. Mi
 | 0007 | SSE Run events with milestones + token deltas |
 | 0008 | Small hexagonal Cargo workspace |
 | 0009 | CI pyramid; live models opt-in |
+| 0010 | Opt-in consumer web session providers (`openai_web`, `grok_web`) |

@@ -6,7 +6,8 @@ use config::WorkerConfig;
 use keryx_api::{router, AppState, OperatorTokenTable};
 use keryx_app::{ControlPlane, DenyAllTools, SessionStore};
 use keryx_model::{
-    FakeModelProvider, MultiModelProvider, OpenAiCompatibleConfig, OpenAiCompatibleProvider,
+    ChatGptWebProvider, FakeModelProvider, GrokWebProvider, MultiModelProvider,
+    OpenAiCompatibleConfig, OpenAiCompatibleProvider,
 };
 use keryx_storage::SqliteSessionStore;
 use keryx_tools::WorkspaceFsTools;
@@ -101,6 +102,18 @@ fn build_model_provider(config: &WorkerConfig) -> Result<Arc<MultiModelProvider>
         }
         let provider = OpenAiCompatibleProvider::new(cfg).map_err(|e| e.to_string())?;
         providers.insert("grok".into(), Arc::new(provider));
+    }
+
+    if let Some(web) = &config.openai_web {
+        let provider = ChatGptWebProvider::new(web.clone()).map_err(|e| e.to_string())?;
+        providers.insert("openai_web".into(), Arc::new(provider));
+        info!("registered model provider openai_web (consumer session)");
+    }
+
+    if let Some(web) = &config.grok_web {
+        let provider = GrokWebProvider::new(web.clone()).map_err(|e| e.to_string())?;
+        providers.insert("grok_web".into(), Arc::new(provider));
+        info!("registered model provider grok_web (consumer session)");
     }
 
     if !providers.contains_key(&config.default_provider) {

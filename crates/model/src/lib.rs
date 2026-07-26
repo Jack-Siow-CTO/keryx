@@ -1,9 +1,14 @@
-//! Keryx model provider adapters (OpenAI, Grok) and test fakes.
+//! Keryx model provider adapters (OpenAI, Grok, consumer web sessions) and test fakes.
 
+mod consumer;
 mod fake;
 mod multi;
 mod openai_compatible;
 
+pub use consumer::{
+    load_secret, load_secret_pair, read_headers_file, redact_secrets, ChatGptWebProvider,
+    ConsumerWebAuth, ConsumerWebConfig, GrokWebProvider,
+};
 pub use fake::FakeModelProvider;
 pub use multi::MultiModelProvider;
 pub use openai_compatible::{

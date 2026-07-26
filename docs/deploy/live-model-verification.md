@@ -43,6 +43,18 @@ Without `KERYX_LIVE_MODELS=1`, the live test file is skipped / ignored and
 1. One **OpenAI** completion via the shared OpenAI-compatible client
 2. One **Grok (xAI)** completion via the same client shape with xAI base URL
 
+### Consumer web sessions (separate file)
+
+Operator-supplied browser session material (ADR 0010):
+
+```bash
+export KERYX_LIVE_MODELS=1
+# CHATGPT_WEB_ACCESS_TOKEN / CHATGPT_WEB_COOKIE and/or GROK_WEB_COOKIE
+cargo test -p keryx-model --test live_consumer_web -- --ignored --nocapture
+```
+
+See `docs/deploy/consumer-web-sessions.md`.
+
 Failures here are **operator/credentials/provider** issues—not Seam 1 control-plane
 or Seam 2 fixture regressions. Keep them separate from merge gates.
 

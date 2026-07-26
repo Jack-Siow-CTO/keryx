@@ -51,6 +51,8 @@ cargo test --workspace
 cargo run -p keryx-worker   # requires KERYX_OPERATOR_TOKEN; binds 127.0.0.1 only
 ```
 
+**Model providers:** official API keys (`openai`, `grok`) and optional consumer web sessions (`openai_web`, `grok_web`) via operator-exported cookies/tokens — see `docs/deploy/consumer-web-sessions.md` and ADR 0010. Prefer API keys when available.
+
 Deploy notes: `docs/deploy/tailnet-edge.md`. Live model opt-in: `docs/deploy/live-model-verification.md`.
 
 ## Name

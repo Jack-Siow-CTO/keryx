@@ -1,4 +1,6 @@
 use keryx_app::{RunBudgets, RunLimits};
+use keryx_model::{ConsumerWebAuth, ConsumerWebConfig};
+use std::collections::HashMap;
 use std::env;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::PathBuf;
@@ -17,6 +19,8 @@ pub struct WorkerConfig {
     pub allowed_tools: Vec<String>,
     pub openai: Option<ProviderConfig>,
     pub grok: Option<ProviderConfig>,
+    pub openai_web: Option<ConsumerWebConfig>,
+    pub grok_web: Option<ConsumerWebConfig>,
     pub default_provider: String,
 }
 
@@ -44,7 +48,9 @@ impl WorkerConfig {
     /// | `XAI_API_KEY` / `XAI_API_KEY_FILE` | Grok credentials |
     /// | `XAI_MODEL` | Grok model id |
     /// | `XAI_BASE_URL` | Optional xAI base URL |
-    /// | `KERYX_DEFAULT_PROVIDER` | `fake` \| `openai` \| `grok` |
+    /// | `CHATGPT_WEB_*` | Consumer ChatGPT web session (`openai_web`) — see `docs/deploy/consumer-web-sessions.md` |
+    /// | `GROK_WEB_*` | Consumer Grok web session (`grok_web`) |
+    /// | `KERYX_DEFAULT_PROVIDER` | `fake` \| `openai` \| `grok` \| `openai_web` \| `grok_web` |
     pub fn from_env() -> Result<Self, String> {
         let bind = parse_bind(env::var("KERYX_BIND").ok())?;
         let data_dir = env::var("KERYX_DATA_DIR")
@@ -109,6 +115,9 @@ impl WorkerConfig {
             base_url: env::var("XAI_BASE_URL").ok(),
         });
 
+        let openai_web = load_openai_web_config()?;
+        let grok_web = load_grok_web_config()?;
+
         let default_provider = env::var("KERYX_DEFAULT_PROVIDER").unwrap_or_else(|_| "fake".into());
 
         Ok(Self {
@@ -125,6 +134,8 @@ impl WorkerConfig {
             allowed_tools,
             openai,
             grok,
+            openai_web,
+            grok_web,
             default_provider,
         })
     }
@@ -169,6 +180,62 @@ fn read_secret(env_key: &str, file_key: &str) -> Result<Option<String>, String> 
         return Ok(Some(trimmed));
     }
     Ok(None)
+}
+
+fn read_headers_file(env_key: &str) -> Result<HashMap<String, String>, String> {
+    keryx_model::read_headers_file(env_key)
+}
+
+fn load_openai_web_config() -> Result<Option<ConsumerWebConfig>, String> {
+    let token = read_secret("CHATGPT_WEB_ACCESS_TOKEN", "CHATGPT_WEB_ACCESS_TOKEN_FILE")?;
+    let cookie = read_secret("CHATGPT_WEB_COOKIE", "CHATGPT_WEB_COOKIE_FILE")?;
+    let auth = ConsumerWebAuth {
+        cookie_header: cookie,
+        bearer_token: token,
+        extra_headers: read_headers_file("CHATGPT_WEB_HEADERS_FILE")?,
+    };
+    if !auth.is_usable() {
+        return Ok(None);
+    }
+    Ok(Some(ConsumerWebConfig {
+        provider_name: "openai_web".into(),
+        base_url: env::var("CHATGPT_WEB_BASE_URL").unwrap_or_else(|_| "https://chatgpt.com".into()),
+        path: env::var("CHATGPT_WEB_PATH").unwrap_or_else(|_| "/backend-api/conversation".into()),
+        model: env::var("CHATGPT_WEB_MODEL").unwrap_or_else(|_| "auto".into()),
+        auth,
+        user_agent: env::var("CHATGPT_WEB_USER_AGENT").unwrap_or_else(|_| {
+            "Mozilla/5.0 (compatible; KeryxWorker/0.1; +https://github.com/Jack-Siow-CTO/keryx)"
+                .into()
+        }),
+    }))
+}
+
+fn load_grok_web_config() -> Result<Option<ConsumerWebConfig>, String> {
+    let cookie = read_secret("GROK_WEB_COOKIE", "GROK_WEB_COOKIE_FILE")?;
+    let auth = ConsumerWebAuth {
+        cookie_header: cookie,
+        bearer_token: None,
+        extra_headers: read_headers_file("GROK_WEB_HEADERS_FILE")?,
+    };
+    let cookie_missing = match auth.cookie_header.as_ref() {
+        None => true,
+        Some(s) => s.is_empty(),
+    };
+    if cookie_missing {
+        return Ok(None);
+    }
+    Ok(Some(ConsumerWebConfig {
+        provider_name: "grok_web".into(),
+        base_url: env::var("GROK_WEB_BASE_URL").unwrap_or_else(|_| "https://grok.com".into()),
+        path: env::var("GROK_WEB_PATH")
+            .unwrap_or_else(|_| "/rest/app-chat/conversations/new".into()),
+        model: env::var("GROK_WEB_MODEL").unwrap_or_else(|_| "grok".into()),
+        auth,
+        user_agent: env::var("GROK_WEB_USER_AGENT").unwrap_or_else(|_| {
+            "Mozilla/5.0 (compatible; KeryxWorker/0.1; +https://github.com/Jack-Siow-CTO/keryx)"
+                .into()
+        }),
+    }))
 }
 
 #[cfg(test)]
