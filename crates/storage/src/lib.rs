@@ -1,6 +1,8 @@
-//! Keryx storage adapter (SQLite). Implements persistence ports for domain/app.
-//!
-//! Product durability lands in a later ticket; this crate is the composition slot.
+//! Keryx storage adapter (`SQLite` later; in-memory for Hello Run / Seam 1).
+
+mod memory;
+
+pub use memory::InMemorySessionStore;
 
 /// Workspace smoke: storage adapter is loadable.
 #[must_use]

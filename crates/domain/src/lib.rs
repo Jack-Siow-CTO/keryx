@@ -2,6 +2,16 @@
 //!
 //! This crate has no I/O, HTTP, `SQLite`, or provider SDKs (ADR 0008).
 
+mod ids;
+mod principal;
+mod run;
+mod session;
+
+pub use ids::{RunId, SessionId};
+pub use principal::{Principal, PrincipalId};
+pub use run::{Run, RunStatus};
+pub use session::Session;
+
 /// Workspace smoke: domain crate is loadable.
 #[must_use]
 pub fn crate_name() -> &'static str {

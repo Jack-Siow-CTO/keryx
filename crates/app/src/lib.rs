@@ -2,6 +2,16 @@
 //!
 //! Depends on domain ports/types only—not concrete adapters (ADR 0008).
 
+mod error;
+mod model;
+mod service;
+mod store;
+
+pub use error::AppError;
+pub use model::{ModelError, ModelProvider, ModelRequest, ModelResponse};
+pub use service::{ControlPlane, ControlPlaneService};
+pub use store::SessionStore;
+
 /// Workspace smoke: app crate depends on domain and is loadable.
 #[must_use]
 pub fn crate_name() -> &'static str {

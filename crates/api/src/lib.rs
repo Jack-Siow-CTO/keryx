@@ -2,6 +2,15 @@
 //!
 //! Transport only: maps domain/app errors at the boundary (ADR 0008).
 
+mod auth;
+mod error;
+mod routes;
+mod state;
+
+pub use auth::OperatorTokenTable;
+pub use routes::router;
+pub use state::AppState;
+
 /// Workspace smoke: API adapter is loadable.
 #[must_use]
 pub fn crate_name() -> &'static str {

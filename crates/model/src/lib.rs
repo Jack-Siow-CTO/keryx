@@ -1,6 +1,8 @@
 //! Keryx model provider adapters (OpenAI, Grok) and test fakes.
-//!
-//! Concrete providers land in later tickets; this crate is the composition slot.
+
+mod fake;
+
+pub use fake::FakeModelProvider;
 
 /// Workspace smoke: model adapter is loadable.
 #[must_use]
