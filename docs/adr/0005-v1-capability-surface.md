@@ -1,0 +1,3 @@
+# v1 capability surface: thin core, OpenAI + Grok models, fs tools, no exec
+
+Core owns the agent loop, Session/Run lifecycle, tool interface, policy enforcement, and Run event log. v1 model adapters are OpenAI and Grok (xAI) via API credentials (subscription entitlements expressed as configured API access, not browser-session scraping). v1 tools are workspace file read/write under allowlisted roots; shell/exec and browser are deferred. Memory is Session transcript only. Adapters compile in through registries rather than dynamic plugin loading. Chosen to keep the Worker minimal, testable, and fail-closed while remaining extensible at stable ports.

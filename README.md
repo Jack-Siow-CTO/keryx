@@ -44,7 +44,14 @@ It is intentionally scoped. Features land when they serve the principles above.
 
 ## Status
 
-**Early / bootstrap.** This repository currently holds project intent and documentation. Implementation will land incrementally under the Jack-Siow-CTO org.
+**v1 Worker implementation in progress.** Hexagonal Rust workspace with control-plane Seam 1 tests (auth, Session/Run, SSE, concurrency, SQLite, workspace tools) and Seam 2 model fixtures (OpenAI/Grok, no live network in default CI).
+
+```bash
+cargo test --workspace
+cargo run -p keryx-worker   # requires KERYX_OPERATOR_TOKEN; binds 127.0.0.1 only
+```
+
+Deploy notes: `docs/deploy/tailnet-edge.md`. Live model opt-in: `docs/deploy/live-model-verification.md`.
 
 ## Name
 
