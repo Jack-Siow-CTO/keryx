@@ -73,6 +73,7 @@ pub trait ControlPlaneService: Send + Sync {
         principal: Principal,
         session_id: SessionId,
         goal: String,
+        provider: Option<String>,
     ) -> Result<Run, AppError>;
     async fn get_run(&self, run_id: RunId) -> Result<Run, AppError>;
     async fn cancel_run(&self, run_id: RunId) -> Result<Run, AppError>;
@@ -104,6 +105,7 @@ where
         principal: Principal,
         session_id: SessionId,
         goal: String,
+        provider: Option<String>,
     ) -> Result<Run, AppError> {
         let session = self
             .store
@@ -154,6 +156,7 @@ where
                 run_id,
                 run_session,
                 goal,
+                provider,
                 budgets,
                 cancel,
             )
@@ -256,6 +259,7 @@ async fn execute_agent_loop<S, M>(
     run_id: RunId,
     session_id: SessionId,
     goal: String,
+    provider: Option<String>,
     budgets: RunBudgets,
     cancel: CancellationToken,
 ) -> Result<(), AppError>
@@ -306,6 +310,7 @@ where
         let model_future = model.complete(ModelRequest {
             goal: goal.clone(),
             transcript: transcript.messages,
+            provider: provider.clone(),
         });
 
         let model_result = if let Some(max_duration) = budgets.max_duration {

@@ -144,6 +144,7 @@ async fn active_run_becomes_interrupted_on_reopen_no_mid_loop_resume() {
             Principal::new(PRINCIPAL),
             session.id,
             "continue after interrupt".into(),
+            None,
         )
         .await
         .unwrap();

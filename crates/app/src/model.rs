@@ -8,6 +8,8 @@ use thiserror::Error;
 pub struct ModelRequest {
     pub goal: String,
     pub transcript: Vec<TranscriptMessage>,
+    /// Optional provider key (`openai`, `grok`, `fake`) for multi-provider routing.
+    pub provider: Option<String>,
 }
 
 /// Completion returned by a Model provider.

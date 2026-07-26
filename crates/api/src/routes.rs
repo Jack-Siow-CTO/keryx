@@ -62,6 +62,8 @@ async fn create_session(
 #[derive(Deserialize)]
 struct StartRunRequest {
     goal: String,
+    /// Optional Model provider key (`openai`, `grok`, `fake`).
+    provider: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -100,7 +102,7 @@ async fn start_run(
         .map_err(|_| ApiError::bad_request("invalid session id"))?;
     let run = state
         .control
-        .start_run(principal, session_id, body.goal)
+        .start_run(principal, session_id, body.goal, body.provider)
         .await?;
     Ok((StatusCode::CREATED, Json(run.into())))
 }

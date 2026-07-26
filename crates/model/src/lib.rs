@@ -1,8 +1,15 @@
 //! Keryx model provider adapters (OpenAI, Grok) and test fakes.
 
 mod fake;
+mod multi;
+mod openai_compatible;
 
 pub use fake::FakeModelProvider;
+pub use multi::MultiModelProvider;
+pub use openai_compatible::{
+    grok_provider, openai_provider, GrokProvider, OpenAiCompatibleConfig, OpenAiCompatibleProvider,
+    OpenAiProvider,
+};
 
 /// Workspace smoke: model adapter is loadable.
 #[must_use]
