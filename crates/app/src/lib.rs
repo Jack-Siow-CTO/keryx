@@ -4,12 +4,15 @@
 
 mod error;
 mod events;
+mod limits;
 mod model;
+mod registry;
 mod service;
 mod store;
 
 pub use error::AppError;
 pub use events::RunEventHub;
+pub use limits::{RunBudgets, RunLimits};
 pub use model::{ModelError, ModelProvider, ModelRequest, ModelResponse};
 pub use service::{ControlPlane, ControlPlaneService};
 pub use store::SessionStore;

@@ -10,25 +10,51 @@ pub struct ModelRequest {
 /// Completion returned by a Model provider.
 ///
 /// `deltas` are optional token/text chunks for SSE `model.delta` events; `content` is the full answer.
+/// `tool_calls` names tools the model wants to invoke (tool execution may be deferred).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ModelResponse {
     pub content: String,
     pub deltas: Vec<String>,
+    pub tool_calls: Vec<String>,
+    /// Estimated tokens consumed (defaults to content character count when unset by adapters).
+    pub tokens_used: u64,
 }
 
 impl ModelResponse {
     #[must_use]
     pub fn text(content: impl Into<String>) -> Self {
+        let content = content.into();
+        let tokens_used = content.chars().count() as u64;
         Self {
-            content: content.into(),
+            content,
             deltas: Vec::new(),
+            tool_calls: Vec::new(),
+            tokens_used,
         }
     }
 
     #[must_use]
     pub fn with_deltas(deltas: Vec<String>) -> Self {
         let content = deltas.concat();
-        Self { content, deltas }
+        let tokens_used = content.chars().count() as u64;
+        Self {
+            content,
+            deltas,
+            tool_calls: Vec::new(),
+            tokens_used,
+        }
+    }
+
+    #[must_use]
+    pub fn with_tool_calls(content: impl Into<String>, tool_calls: Vec<String>) -> Self {
+        let content = content.into();
+        let tokens_used = content.chars().count() as u64;
+        Self {
+            content,
+            deltas: Vec::new(),
+            tool_calls,
+            tokens_used,
+        }
     }
 }
 

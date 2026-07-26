@@ -36,6 +36,14 @@ impl ApiError {
     }
 
     #[must_use]
+    pub fn conflict(message: impl Into<String>) -> Self {
+        Self {
+            status: StatusCode::CONFLICT,
+            message: message.into(),
+        }
+    }
+
+    #[must_use]
     pub fn internal(message: impl Into<String>) -> Self {
         Self {
             status: StatusCode::INTERNAL_SERVER_ERROR,
@@ -48,6 +56,9 @@ impl From<AppError> for ApiError {
     fn from(value: AppError) -> Self {
         match value {
             AppError::SessionNotFound | AppError::RunNotFound => Self::not_found(value.to_string()),
+            AppError::ActiveRunExists { .. }
+            | AppError::GlobalCapExceeded { .. }
+            | AppError::RunNotActive => Self::conflict(value.to_string()),
             AppError::Store(msg) => Self::internal(msg),
             AppError::Model(err) => Self::internal(err.to_string()),
         }

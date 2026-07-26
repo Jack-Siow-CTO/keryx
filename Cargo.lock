@@ -283,6 +283,7 @@ dependencies = [
  "keryx-domain",
  "thiserror",
  "tokio",
+ "tokio-util",
 ]
 
 [[package]]
@@ -301,6 +302,7 @@ dependencies = [
  "async-trait",
  "keryx-app",
  "keryx-domain",
+ "tokio",
 ]
 
 [[package]]

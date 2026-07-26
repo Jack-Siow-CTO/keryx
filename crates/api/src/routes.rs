@@ -22,6 +22,7 @@ pub fn router(state: AppState) -> Router {
         .route("/v1/sessions", post(create_session))
         .route("/v1/sessions/{session_id}/runs", post(start_run))
         .route("/v1/runs/{run_id}", get(get_run))
+        .route("/v1/runs/{run_id}/cancel", post(cancel_run))
         .route("/v1/runs/{run_id}/events", get(stream_run_events))
         .with_state(state)
 }
@@ -111,6 +112,16 @@ async fn get_run(
 ) -> Result<Json<RunResponse>, ApiError> {
     let run_id = RunId::from_str(&run_id).map_err(|_| ApiError::bad_request("invalid run id"))?;
     let run = state.control.get_run(run_id).await?;
+    Ok(Json(run.into()))
+}
+
+async fn cancel_run(
+    State(state): State<AppState>,
+    AuthPrincipal(_principal): AuthPrincipal,
+    Path(run_id): Path<String>,
+) -> Result<Json<RunResponse>, ApiError> {
+    let run_id = RunId::from_str(&run_id).map_err(|_| ApiError::bad_request("invalid run id"))?;
+    let run = state.control.cancel_run(run_id).await?;
     Ok(Json(run.into()))
 }
 

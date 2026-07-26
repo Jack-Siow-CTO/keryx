@@ -60,4 +60,14 @@ impl Run {
         self.status = RunStatus::Failed;
         self.result = Some(reason.into());
     }
+
+    pub fn cancel(&mut self) {
+        self.status = RunStatus::Cancelled;
+        self.result = Some("cancelled".into());
+    }
+
+    pub fn interrupt(&mut self) {
+        self.status = RunStatus::Interrupted;
+        self.result = Some("interrupted".into());
+    }
 }
