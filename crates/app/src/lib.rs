@@ -9,6 +9,7 @@ mod model;
 mod registry;
 mod service;
 mod store;
+mod tools;
 
 pub use error::AppError;
 pub use events::RunEventHub;
@@ -16,6 +17,7 @@ pub use limits::{RunBudgets, RunLimits};
 pub use model::{ModelError, ModelProvider, ModelRequest, ModelResponse};
 pub use service::{ControlPlane, ControlPlaneService};
 pub use store::SessionStore;
+pub use tools::{summarize_tool_args, DenyAllTools, ToolCall, ToolError, ToolResult, ToolRuntime};
 
 /// Workspace smoke: app crate depends on domain and is loadable.
 #[must_use]

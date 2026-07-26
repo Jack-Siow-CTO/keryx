@@ -8,8 +8,15 @@ repository.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+async-trait = "0.1"
 keryx-app = { path = "../app" }
 keryx-domain = { path = "../domain" }
+serde_json = "1"
+tokio = { version = "1", features = ["fs", "io-util"] }
+
+[dev-dependencies]
+tempfile = "3"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "fs", "io-util"] }
 
 [lints]
 workspace = true

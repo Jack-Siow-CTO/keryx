@@ -1,3 +1,4 @@
+use crate::tools::ToolCall;
 use async_trait::async_trait;
 use keryx_domain::TranscriptMessage;
 use thiserror::Error;
@@ -12,12 +13,12 @@ pub struct ModelRequest {
 /// Completion returned by a Model provider.
 ///
 /// `deltas` are optional token/text chunks for SSE `model.delta` events; `content` is the full answer.
-/// `tool_calls` names tools the model wants to invoke (tool execution may be deferred).
+/// `tool_calls` are tools the model wants to invoke before the next reasoning step.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ModelResponse {
     pub content: String,
     pub deltas: Vec<String>,
-    pub tool_calls: Vec<String>,
+    pub tool_calls: Vec<ToolCall>,
     /// Estimated tokens consumed (defaults to content character count when unset by adapters).
     pub tokens_used: u64,
 }
@@ -48,7 +49,7 @@ impl ModelResponse {
     }
 
     #[must_use]
-    pub fn with_tool_calls(content: impl Into<String>, tool_calls: Vec<String>) -> Self {
+    pub fn with_tool_calls(content: impl Into<String>, tool_calls: Vec<ToolCall>) -> Self {
         let content = content.into();
         let tokens_used = content.chars().count() as u64;
         Self {

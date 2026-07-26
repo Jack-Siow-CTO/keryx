@@ -4,6 +4,7 @@ use crate::limits::{RunBudgets, RunLimits};
 use crate::model::{ModelProvider, ModelRequest};
 use crate::registry::ActiveRunRegistry;
 use crate::store::SessionStore;
+use crate::tools::{summarize_tool_args, DenyAllTools, ToolRuntime};
 use async_trait::async_trait;
 use keryx_domain::{
     Principal, Run, RunEvent, RunEventKind, RunId, RunStatus, Session, SessionId, TranscriptMessage,
@@ -13,10 +14,13 @@ use tokio::sync::{broadcast, Mutex};
 use tokio::time::timeout;
 use tokio_util::sync::CancellationToken;
 
+const MAX_AGENT_STEPS: u32 = 8;
+
 /// Application service for Session/Run lifecycle and the agent loop.
 pub struct ControlPlane<S, M> {
     store: Arc<S>,
     model: Arc<M>,
+    tools: Arc<dyn ToolRuntime>,
     events: Arc<RunEventHub>,
     limits: RunLimits,
     active: Arc<Mutex<ActiveRunRegistry>>,
@@ -34,9 +38,20 @@ where
 
     #[must_use]
     pub fn with_limits(store: Arc<S>, model: Arc<M>, limits: RunLimits) -> Self {
+        Self::with_tools(store, model, limits, Arc::new(DenyAllTools))
+    }
+
+    #[must_use]
+    pub fn with_tools(
+        store: Arc<S>,
+        model: Arc<M>,
+        limits: RunLimits,
+        tools: Arc<dyn ToolRuntime>,
+    ) -> Self {
         Self {
             store,
             model,
+            tools,
             events: Arc::new(RunEventHub::new()),
             limits,
             active: Arc::new(Mutex::new(ActiveRunRegistry::new())),
@@ -122,6 +137,7 @@ where
 
         let store = Arc::clone(&self.store);
         let model = Arc::clone(&self.model);
+        let tools = Arc::clone(&self.tools);
         let events = Arc::clone(&self.events);
         let active = Arc::clone(&self.active);
         let budgets = self.limits.default_budgets.clone();
@@ -132,6 +148,7 @@ where
             let _ = execute_agent_loop(
                 store,
                 model,
+                tools,
                 events,
                 active,
                 run_id,
@@ -229,10 +246,11 @@ async fn finalize_run<S: SessionStore>(
     Ok(())
 }
 
-#[allow(clippy::too_many_arguments)] // agent loop needs store, model, events, registry, ids, budgets, cancel
+#[allow(clippy::too_many_arguments)] // agent loop needs store, model, tools, events, registry, ids, budgets, cancel
 async fn execute_agent_loop<S, M>(
     store: Arc<S>,
     model: Arc<M>,
+    tools: Arc<dyn ToolRuntime>,
     events: Arc<RunEventHub>,
     active: Arc<Mutex<ActiveRunRegistry>>,
     run_id: RunId,
@@ -254,108 +272,46 @@ where
 
     publish(RunEventKind::RunStarted)?;
 
-    if cancel.is_cancelled() {
-        let mut run = load_run(store.as_ref(), run_id).await?;
-        run.cancel();
-        return finalize_run(
-            store.as_ref(),
-            events.as_ref(),
-            active.as_ref(),
-            session_id,
-            run_id,
-            run,
-            RunEventKind::RunCancelled,
-        )
-        .await;
-    }
-
-    publish(RunEventKind::ModelStarted)?;
-
-    let transcript = store
-        .get_transcript(session_id)
+    // User goal is part of durable Transcript once the Run completes successfully;
+    // append up front so tool steps and subsequent model calls see it.
+    store
+        .append_transcript(session_id, TranscriptMessage::user(goal.clone()))
         .await
         .map_err(AppError::Store)?;
-    let model_future = model.complete(ModelRequest {
-        goal: goal.clone(),
-        transcript: transcript.messages,
-    });
-    let model_result = if let Some(max_duration) = budgets.max_duration {
-        tokio::select! {
-            () = cancel.cancelled() => {
-                let mut run = load_run(store.as_ref(), run_id).await?;
-                run.cancel();
-                return finalize_run(
-                    store.as_ref(),
-                    events.as_ref(),
-                    active.as_ref(),
-                    session_id,
-                    run_id,
-                    run,
-                    RunEventKind::RunCancelled,
-                ).await;
-            }
-            result = timeout(max_duration, model_future) => {
-                match result {
-                    Ok(inner) => inner,
-                    Err(_) => {
-                        let mut run = load_run(store.as_ref(), run_id).await?;
-                        let reason = "budget exceeded: time".to_string();
-                        run.fail(reason.clone());
-                        let _ = publish(RunEventKind::RunBudget {
-                            message: reason.clone(),
-                        });
-                        return finalize_run(
-                            store.as_ref(),
-                            events.as_ref(),
-                            active.as_ref(),
-                            session_id,
-                            run_id,
-                            run,
-                            RunEventKind::RunFailed { reason },
-                        ).await;
-                    }
-                }
-            }
+
+    let mut tool_calls_used: u64 = 0;
+
+    for _step in 0..MAX_AGENT_STEPS {
+        if cancel.is_cancelled() {
+            let mut run = load_run(store.as_ref(), run_id).await?;
+            run.cancel();
+            return finalize_run(
+                store.as_ref(),
+                events.as_ref(),
+                active.as_ref(),
+                session_id,
+                run_id,
+                run,
+                RunEventKind::RunCancelled,
+            )
+            .await;
         }
-    } else {
-        tokio::select! {
-            () = cancel.cancelled() => {
-                let mut run = load_run(store.as_ref(), run_id).await?;
-                run.cancel();
-                return finalize_run(
-                    store.as_ref(),
-                    events.as_ref(),
-                    active.as_ref(),
-                    session_id,
-                    run_id,
-                    run,
-                    RunEventKind::RunCancelled,
-                ).await;
-            }
-            result = model_future => result,
-        }
-    };
 
-    let mut run = load_run(store.as_ref(), run_id).await?;
+        publish(RunEventKind::ModelStarted)?;
 
-    if cancel.is_cancelled() {
-        run.cancel();
-        return finalize_run(
-            store.as_ref(),
-            events.as_ref(),
-            active.as_ref(),
-            session_id,
-            run_id,
-            run,
-            RunEventKind::RunCancelled,
-        )
-        .await;
-    }
+        let transcript = store
+            .get_transcript(session_id)
+            .await
+            .map_err(AppError::Store)?;
+        let model_future = model.complete(ModelRequest {
+            goal: goal.clone(),
+            transcript: transcript.messages,
+        });
 
-    match model_result {
-        Ok(response) => {
-            for text in response.deltas {
-                if cancel.is_cancelled() {
+        let model_result = if let Some(max_duration) = budgets.max_duration {
+            tokio::select! {
+                () = cancel.cancelled() => {
+                    let mut run = load_run(store.as_ref(), run_id).await?;
                     run.cancel();
                     return finalize_run(
                         store.as_ref(),
@@ -365,23 +321,36 @@ where
                         run_id,
                         run,
                         RunEventKind::RunCancelled,
-                    )
-                    .await;
+                    ).await;
                 }
-                publish(RunEventKind::ModelDelta { text })?;
+                result = timeout(max_duration, model_future) => {
+                    match result {
+                        Ok(inner) => inner,
+                        Err(_) => {
+                            let mut run = load_run(store.as_ref(), run_id).await?;
+                            let reason = "budget exceeded: time".to_string();
+                            run.fail(reason.clone());
+                            let _ = publish(RunEventKind::RunBudget {
+                                message: reason.clone(),
+                            });
+                            return finalize_run(
+                                store.as_ref(),
+                                events.as_ref(),
+                                active.as_ref(),
+                                session_id,
+                                run_id,
+                                run,
+                                RunEventKind::RunFailed { reason },
+                            ).await;
+                        }
+                    }
+                }
             }
-            publish(RunEventKind::ModelFinished)?;
-
-            if let Some(max_tokens) = budgets.max_tokens {
-                if response.tokens_used > max_tokens {
-                    let reason = format!(
-                        "budget exceeded: tokens (used={}, max={max_tokens})",
-                        response.tokens_used
-                    );
-                    run.fail(reason.clone());
-                    let _ = publish(RunEventKind::RunBudget {
-                        message: reason.clone(),
-                    });
+        } else {
+            tokio::select! {
+                () = cancel.cancelled() => {
+                    let mut run = load_run(store.as_ref(), run_id).await?;
+                    run.cancel();
                     return finalize_run(
                         store.as_ref(),
                         events.as_ref(),
@@ -389,45 +358,88 @@ where
                         session_id,
                         run_id,
                         run,
-                        RunEventKind::RunFailed { reason },
-                    )
-                    .await;
+                        RunEventKind::RunCancelled,
+                    ).await;
                 }
+                result = model_future => result,
             }
+        };
 
-            if let Some(max_tool_calls) = budgets.max_tool_calls {
-                let requested = response.tool_calls.len() as u64;
-                if requested > max_tool_calls {
-                    let reason = format!(
-                        "budget exceeded: tool_calls (requested={requested}, max={max_tool_calls})"
-                    );
-                    run.fail(reason.clone());
-                    let _ = publish(RunEventKind::RunBudget {
-                        message: reason.clone(),
-                    });
-                    return finalize_run(
-                        store.as_ref(),
-                        events.as_ref(),
-                        active.as_ref(),
-                        session_id,
-                        run_id,
-                        run,
-                        RunEventKind::RunFailed { reason },
-                    )
-                    .await;
-                }
+        let mut run = load_run(store.as_ref(), run_id).await?;
+        if cancel.is_cancelled() {
+            run.cancel();
+            return finalize_run(
+                store.as_ref(),
+                events.as_ref(),
+                active.as_ref(),
+                session_id,
+                run_id,
+                run,
+                RunEventKind::RunCancelled,
+            )
+            .await;
+        }
+
+        let response = match model_result {
+            Ok(r) => r,
+            Err(err) => {
+                let reason = err.to_string();
+                run.fail(reason.clone());
+                return finalize_run(
+                    store.as_ref(),
+                    events.as_ref(),
+                    active.as_ref(),
+                    session_id,
+                    run_id,
+                    run,
+                    RunEventKind::RunFailed { reason },
+                )
+                .await;
             }
+        };
 
-            for name in response.tool_calls {
-                publish(RunEventKind::ToolStarted { name: name.clone() })?;
-                publish(RunEventKind::ToolFinished { name })?;
+        for text in response.deltas {
+            if cancel.is_cancelled() {
+                run.cancel();
+                return finalize_run(
+                    store.as_ref(),
+                    events.as_ref(),
+                    active.as_ref(),
+                    session_id,
+                    run_id,
+                    run,
+                    RunEventKind::RunCancelled,
+                )
+                .await;
             }
+            publish(RunEventKind::ModelDelta { text })?;
+        }
+        publish(RunEventKind::ModelFinished)?;
 
-            // Durable conversational truth: append goal + answer to Session Transcript.
-            store
-                .append_transcript(session_id, TranscriptMessage::user(goal))
-                .await
-                .map_err(AppError::Store)?;
+        if let Some(max_tokens) = budgets.max_tokens {
+            if response.tokens_used > max_tokens {
+                let reason = format!(
+                    "budget exceeded: tokens (used={}, max={max_tokens})",
+                    response.tokens_used
+                );
+                run.fail(reason.clone());
+                let _ = publish(RunEventKind::RunBudget {
+                    message: reason.clone(),
+                });
+                return finalize_run(
+                    store.as_ref(),
+                    events.as_ref(),
+                    active.as_ref(),
+                    session_id,
+                    run_id,
+                    run,
+                    RunEventKind::RunFailed { reason },
+                )
+                .await;
+            }
+        }
+
+        if response.tool_calls.is_empty() {
             store
                 .append_transcript(
                     session_id,
@@ -435,9 +447,8 @@ where
                 )
                 .await
                 .map_err(AppError::Store)?;
-
             run.complete(response.content);
-            finalize_run(
+            return finalize_run(
                 store.as_ref(),
                 events.as_ref(),
                 active.as_ref(),
@@ -446,21 +457,102 @@ where
                 run,
                 RunEventKind::RunCompleted,
             )
-            .await
+            .await;
         }
-        Err(err) => {
-            let reason = err.to_string();
-            run.fail(reason.clone());
-            finalize_run(
-                store.as_ref(),
-                events.as_ref(),
-                active.as_ref(),
-                session_id,
-                run_id,
-                run,
-                RunEventKind::RunFailed { reason },
-            )
-            .await
+
+        // Tool phase
+        for call in response.tool_calls {
+            if cancel.is_cancelled() {
+                run.cancel();
+                return finalize_run(
+                    store.as_ref(),
+                    events.as_ref(),
+                    active.as_ref(),
+                    session_id,
+                    run_id,
+                    run,
+                    RunEventKind::RunCancelled,
+                )
+                .await;
+            }
+
+            tool_calls_used += 1;
+            if let Some(max_tool_calls) = budgets.max_tool_calls {
+                if tool_calls_used > max_tool_calls {
+                    let reason = format!(
+                        "budget exceeded: tool_calls (used={tool_calls_used}, max={max_tool_calls})"
+                    );
+                    run.fail(reason.clone());
+                    let _ = publish(RunEventKind::RunBudget {
+                        message: reason.clone(),
+                    });
+                    return finalize_run(
+                        store.as_ref(),
+                        events.as_ref(),
+                        active.as_ref(),
+                        session_id,
+                        run_id,
+                        run,
+                        RunEventKind::RunFailed { reason },
+                    )
+                    .await;
+                }
+            }
+
+            let args_summary = summarize_tool_args(&call.arguments);
+            publish(RunEventKind::ToolStarted {
+                name: format!("{} ({args_summary})", call.name),
+            })?;
+
+            match tools.invoke(call.clone()).await {
+                Ok(result) => {
+                    publish(RunEventKind::ToolFinished {
+                        name: format!("{}: {}", call.name, result.summary),
+                    })?;
+                    store
+                        .append_transcript(
+                            session_id,
+                            TranscriptMessage {
+                                role: keryx_domain::MessageRole::Tool,
+                                content: format!("{}: {}", call.name, result.content),
+                            },
+                        )
+                        .await
+                        .map_err(AppError::Store)?;
+                }
+                Err(err) => {
+                    let summary = err.to_string();
+                    publish(RunEventKind::ToolFinished {
+                        name: format!("{}: error={summary}", call.name),
+                    })?;
+                    // Policy deny / path jail fail closed but still record for the model / client.
+                    store
+                        .append_transcript(
+                            session_id,
+                            TranscriptMessage {
+                                role: keryx_domain::MessageRole::Tool,
+                                content: format!("{}: error={summary}", call.name),
+                            },
+                        )
+                        .await
+                        .map_err(AppError::Store)?;
+                }
+            }
         }
+        // Continue agent loop with updated Transcript.
     }
+
+    let mut run = load_run(store.as_ref(), run_id).await?;
+    let reason = "agent loop exceeded max steps".to_string();
+    run.fail(reason.clone());
+    finalize_run(
+        store.as_ref(),
+        events.as_ref(),
+        active.as_ref(),
+        session_id,
+        run_id,
+        run,
+        RunEventKind::RunFailed { reason },
+    )
+    .await
 }

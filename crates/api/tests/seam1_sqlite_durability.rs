@@ -202,12 +202,12 @@ async fn new_run_sees_prior_transcript_after_reopen() {
     let run1 = body_json(start1).await["id"].as_str().unwrap().to_string();
     let rec1 = wait_completed(&app, &run1).await;
     assert_eq!(rec1["status"], "completed");
-    // First run sees empty transcript.
+    // First run sees only the user goal message appended at loop start.
     assert!(
         rec1["result"]
             .as_str()
             .unwrap()
-            .contains("transcript_msgs=0"),
+            .contains("transcript_msgs=1"),
         "first run result: {}",
         rec1["result"]
     );
@@ -237,12 +237,12 @@ async fn new_run_sees_prior_transcript_after_reopen() {
     let run2 = body_json(start2).await["id"].as_str().unwrap().to_string();
     let rec2 = wait_completed(&app2, &run2).await;
     assert_eq!(rec2["status"], "completed");
-    // Second run sees 2 messages from the first completed Run.
+    // Second run appends its goal first, then sees prior user+assistant (2) + new user (1) = 3.
     assert!(
         rec2["result"]
             .as_str()
             .unwrap()
-            .contains("transcript_msgs=2"),
+            .contains("transcript_msgs=3"),
         "second run result: {}",
         rec2["result"]
     );

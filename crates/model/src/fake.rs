@@ -1,5 +1,6 @@
 use async_trait::async_trait;
-use keryx_app::{ModelError, ModelProvider, ModelRequest, ModelResponse};
+use keryx_app::{ModelError, ModelProvider, ModelRequest, ModelResponse, ToolCall};
+use serde_json::json;
 use std::sync::Mutex;
 use std::time::Duration;
 
@@ -8,7 +9,7 @@ use std::time::Duration;
 pub struct FakeModelProvider {
     fixed_content: Option<String>,
     deltas: Option<Vec<String>>,
-    tool_calls: Option<Vec<String>>,
+    tool_calls: Option<Vec<ToolCall>>,
     delay: Option<Duration>,
     script: Mutex<Vec<ModelResponse>>,
 }
@@ -62,11 +63,18 @@ impl FakeModelProvider {
 
     /// Request tool calls so tool-call budgets can be exercised without real tools.
     #[must_use]
-    pub fn with_tool_calls(content: impl Into<String>, tool_calls: Vec<impl Into<String>>) -> Self {
+    pub fn with_tool_calls(content: impl Into<String>, tool_names: Vec<impl Into<String>>) -> Self {
+        let tool_calls = tool_names
+            .into_iter()
+            .map(|n| ToolCall {
+                name: n.into(),
+                arguments: json!({}),
+            })
+            .collect();
         Self {
             fixed_content: Some(content.into()),
             deltas: None,
-            tool_calls: Some(tool_calls.into_iter().map(Into::into).collect()),
+            tool_calls: Some(tool_calls),
             delay: None,
             script: Mutex::new(Vec::new()),
         }

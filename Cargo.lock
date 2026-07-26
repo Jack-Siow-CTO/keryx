@@ -348,6 +348,7 @@ dependencies = [
  "keryx-domain",
  "keryx-model",
  "keryx-storage",
+ "keryx-tools",
  "serde",
  "serde_json",
  "tempfile",
@@ -362,6 +363,7 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "keryx-domain",
+ "serde_json",
  "thiserror",
  "tokio",
  "tokio-util",
@@ -383,6 +385,7 @@ dependencies = [
  "async-trait",
  "keryx-app",
  "keryx-domain",
+ "serde_json",
  "tokio",
 ]
 
@@ -402,8 +405,12 @@ dependencies = [
 name = "keryx-tools"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "keryx-app",
  "keryx-domain",
+ "serde_json",
+ "tempfile",
+ "tokio",
 ]
 
 [[package]]
@@ -724,6 +731,7 @@ version = "1.53.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "202caea871b69668250d242070849eb495be178ed697a3e98aebce5bc81a0bed"
 dependencies = [
+ "bytes",
  "libc",
  "mio",
  "pin-project-lite",
