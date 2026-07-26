@@ -1,0 +1,11 @@
+[package]
+name = "keryx-domain"
+description = "Keryx domain types and pure rules (Session, Run, Principal, Policy, tools, events)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[lints]
+workspace = true

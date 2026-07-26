@@ -1,0 +1,15 @@
+[package]
+name = "keryx-model"
+description = "Keryx model provider adapters (OpenAI, Grok/xAI) and fakes for tests"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+keryx-app = { path = "../app" }
+keryx-domain = { path = "../domain" }
+
+[lints]
+workspace = true

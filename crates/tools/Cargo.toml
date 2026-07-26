@@ -1,0 +1,15 @@
+[package]
+name = "keryx-tools"
+description = "Keryx tool adapters (workspace filesystem tools with path jail)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+keryx-app = { path = "../app" }
+keryx-domain = { path = "../domain" }
+
+[lints]
+workspace = true

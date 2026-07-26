@@ -1,0 +1,15 @@
+[package]
+name = "keryx-api"
+description = "Keryx HTTP control plane and SSE Run event transport"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+keryx-app = { path = "../app" }
+keryx-domain = { path = "../domain" }
+
+[lints]
+workspace = true

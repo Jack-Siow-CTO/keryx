@@ -1,0 +1,15 @@
+[package]
+name = "keryx-storage"
+description = "Keryx storage adapter: SQLite durability for Sessions, Transcripts, and Run records"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+keryx-app = { path = "../app" }
+keryx-domain = { path = "../domain" }
+
+[lints]
+workspace = true

@@ -1,0 +1,23 @@
+[package]
+name = "keryx-worker"
+description = "Keryx worker binary: composition root (config, loopback bind, graceful shutdown)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[[bin]]
+name = "keryx"
+path = "src/main.rs"
+
+[dependencies]
+keryx-api = { path = "../api" }
+keryx-app = { path = "../app" }
+keryx-domain = { path = "../domain" }
+keryx-model = { path = "../model" }
+keryx-storage = { path = "../storage" }
+keryx-tools = { path = "../tools" }
+
+[lints]
+workspace = true
