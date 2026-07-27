@@ -1,59 +1,191 @@
 # Keryx
 
-**Keryx** (Greek κῆρυξ — *herald, messenger*) is a minimal, extensible, performant, secure, and reliable Rust-based agentic system in the spirit of Hermes-style agents: a lean messenger that takes intent, routes work, and returns results—without the weight of a full framework.
+**Keryx** (Greek κῆρυξ — *herald, messenger*) is a minimal, secure Rust **agent Worker**: a long-running process that accepts intent, runs a bounded agent loop with tools, and returns outcomes—without the weight of a full multi-agent framework.
 
-Built for personal and team use, designed to run efficiently on machines like [jack-agent-worker](https://github.com/Jack-Siow-CTO), where resource efficiency and operational control matter.
+Host it on your laptop or a Linux worker. Reach it from Mac/phone over a private Tailnet if you want. Prefer official OpenAI and Grok (xAI) API keys for models.
+
+## Quick Start (about 5 minutes)
+
+**Prerequisites:** [Rust](https://rustup.rs/) (stable), `curl`, macOS or Linux.
+
+```bash
+git clone https://github.com/Jack-Siow-CTO/keryx.git
+cd keryx
+./scripts/install.sh
+```
+
+Load config and start the Worker (loopback only):
+
+```bash
+set -a && source ~/.config/keryx/env && set +a
+keryx doctor    # readiness checks
+keryx           # control plane on 127.0.0.1:8787
+```
+
+In another terminal, verify:
+
+```bash
+set -a && source ~/.config/keryx/env && set +a
+export KERYX_URL=http://127.0.0.1:8787
+./scripts/smoke.sh
+```
+
+Use a **real model** (recommended path):
+
+1. Put `OPENAI_API_KEY` and/or `XAI_API_KEY` in `~/.config/keryx/env`
+2. Set `KERYX_DEFAULT_PROVIDER=openai` or `grok`
+3. Restart `keryx` and re-run `./scripts/smoke.sh` (optionally `KERYX_SMOKE_PROVIDER=openai`)
+
+Full install options: [docs/deploy/install.md](docs/deploy/install.md).  
+Ready-to-use ladder: [docs/deploy/operator-checklist.md](docs/deploy/operator-checklist.md).
 
 ## Why Keryx
 
-Most agent stacks optimize for demos and feature breadth. Keryx optimizes for **running as a serious system**:
-
 | Principle | What it means |
 |-----------|----------------|
-| **Minimal** | Small core surface. No kitchen-sink runtime. Only what an agent needs to plan, act, and report. |
-| **Extensible** | Clear extension points for tools, models, memory, and transports—without forking the core for every experiment. |
-| **Performant** | Rust by default: low latency, tight memory, predictable CPU. Suitable for always-on worker hosts. |
-| **Secure** | Least privilege, explicit tool boundaries, careful secret handling. Security is a design constraint, not a later audit. |
-| **Reliable** | Fail closed, recover cleanly, log enough to debug. Prefer boring correctness over clever magic. |
+| **Minimal** | Small core surface. Only what an agent needs to plan, act, and report. |
+| **Extensible** | Clear ports for tools, models, memory, and transport. |
+| **Performant** | Rust: low latency, tight memory, always-on worker hosts. |
+| **Secure** | Loopback bind, operator token, path-jailed file tools, fail closed. |
+| **Reliable** | SQLite durability, cancel and budgets, clean interrupt on crash. |
 
-## What it is
+## Install
 
-Keryx is a **Hermes-inspired, forked-type agentic system**—not a line-by-line port of any single project, but a purpose-built Rust agent shaped by the same ideas:
+| Method | When to use |
+|--------|-------------|
+| `./scripts/install.sh` | Default — builds with Cargo, writes config dirs |
+| `cargo install --path crates/worker --locked` | Manual from-source |
+| `docker compose up --build` | Optional container path |
+| systemd (`--system`) | Always-on Linux host |
 
-- An **agent loop** that can reason, call tools, and iterate toward a goal
-- **Tool use** as first-class, sandboxed capabilities rather than unbounded shell access
-- A **messenger** model: receive task → execute with constraints → deliver outcome
-- A **small, hostable binary** you control end-to-end (build, deploy, observe)
+```bash
+# user install (default)
+./scripts/install.sh
 
-It is intentionally scoped. Features land when they serve the principles above.
+# Linux system install
+sudo ./scripts/install.sh --system
+sudo systemctl enable --now keryx
+```
 
-## Goals
+Details: [docs/deploy/install.md](docs/deploy/install.md).
 
-- Ship a **production-minded personal agent** you can host on your own infrastructure
-- Keep the core **understandable in one sitting** and safe to change
-- Make extension **cheap** (new tools, providers, policies) without growing a monolith
-- Prefer **static linking / simple deploy** patterns friendly to Linux workers
-- Stay **honest about limits**: reliability and security beat autonomous freelancing
+## Configure
+
+Copy of the template lives at [`.env.example`](.env.example). Install places it at `~/.config/keryx/env` (mode `600`).
+
+| Variable | Purpose |
+|----------|---------|
+| `KERYX_OPERATOR_TOKEN` | Required bearer token for `/v1/*` |
+| `KERYX_BIND` | Default `127.0.0.1:8787` (loopback only) |
+| `KERYX_DATA_DIR` | SQLite directory |
+| `KERYX_DEFAULT_PROVIDER` | `fake` \| `openai` \| `grok` (plus optional web providers) |
+| `OPENAI_API_KEY` / `XAI_API_KEY` | Official model credentials |
+| `KERYX_WORKSPACE_ROOTS` | Colon-separated file-tool roots |
+
+Prefer `*_FILE` secret paths in production. Never commit tokens or keys.
+
+## Run
+
+```bash
+# foreground
+set -a && source ~/.config/keryx/env && set +a
+keryx
+
+# checks (config + optional live /health)
+keryx doctor
+keryx version
+```
+
+**systemd** (after system install): `sudo systemctl enable --now keryx`  
+**Docker:** see [docs/deploy/install.md](docs/deploy/install.md#method-3--docker-optional)
+
+## Use the control plane
+
+```bash
+export KERYX_URL=http://127.0.0.1:8787
+export TOKEN=...   # same as KERYX_OPERATOR_TOKEN
+
+curl -sS "$KERYX_URL/health"
+
+curl -sS -X POST "$KERYX_URL/v1/sessions" \
+  -H "authorization: Bearer $TOKEN"
+
+curl -sS -X POST "$KERYX_URL/v1/sessions/<SESSION_ID>/runs" \
+  -H "authorization: Bearer $TOKEN" \
+  -H "content-type: application/json" \
+  -d '{"goal":"summarize my notes","provider":"openai"}'
+
+curl -sSN "$KERYX_URL/v1/runs/<RUN_ID>/events" \
+  -H "authorization: Bearer $TOKEN" \
+  -H "accept: text/event-stream"
+
+curl -sS -X POST "$KERYX_URL/v1/runs/<RUN_ID>/cancel" \
+  -H "authorization: Bearer $TOKEN"
+```
+
+Or: `./scripts/smoke.sh`.
+
+## Models
+
+**Recommended:** official APIs — OpenAI and Grok (xAI) via API keys.
+
+```bash
+# ~/.config/keryx/env
+OPENAI_API_KEY=sk-...
+# XAI_API_KEY=xai-...
+KERYX_DEFAULT_PROVIDER=openai
+```
+
+Opt-in live adapter tests: [docs/deploy/live-model-verification.md](docs/deploy/live-model-verification.md).
+
+**Advanced / unofficial:** consumer ChatGPT or Grok *browser session* material — may break and may violate vendor ToS. See [docs/deploy/consumer-web-sessions.md](docs/deploy/consumer-web-sessions.md). Prefer API keys.
+
+## Secure remote access (optional)
+
+Default product path is **local loopback**. For Mac/phone:
+
+```text
+device --Tailscale HTTPS--> Caddy (Tailnet IPs only) --> Worker 127.0.0.1
+```
+
+- Do **not** bind the Worker on `0.0.0.0`
+- Do **not** use Tailscale Funnel/Serve as the product path
+- Tailscale is reachability only; the **operator token** is still required
+
+Guide: [docs/deploy/tailnet-edge.md](docs/deploy/tailnet-edge.md).
+
+## Verify readiness
+
+| Level | What |
+|-------|------|
+| 1 | `cargo test --workspace` |
+| 2 | install + `fake` + `./scripts/smoke.sh` |
+| 3 | real OpenAI/Grok Run |
+| 4 | systemd always-on |
+| 5 | Tailnet edge |
+
+Checklist: [docs/deploy/operator-checklist.md](docs/deploy/operator-checklist.md).
+
+## Development
+
+```bash
+cargo test --workspace --all-targets
+cargo clippy --workspace --all-targets -- -D warnings
+cargo fmt --all -- --check
+```
+
+Hexagonal workspace (`domain` ← `app` ← adapters ← `worker`). Glossary: [CONTEXT.md](CONTEXT.md). Spec: [docs/specs/0001-keryx-v1-worker.md](docs/specs/0001-keryx-v1-worker.md). ADRs: [docs/adr/](docs/adr/).
+
+## Status
+
+**v1 Worker** — control plane (Sessions, Runs, SSE, auth, budgets, cancel), SQLite durability, workspace file tools, OpenAI/Grok providers, optional consumer-web adapters, install scripts and deploy docs for public self-host.
 
 ## Non-goals (for now)
 
 - Matching every feature of larger multi-agent frameworks
-- Opaque “do anything” automation without explicit policy
-- Heavy plugin ecosystems before the core is solid
-- Cloud lock-in or mandatory third-party control planes
-
-## Status
-
-**v1 Worker implementation in progress.** Hexagonal Rust workspace with control-plane Seam 1 tests (auth, Session/Run, SSE, concurrency, SQLite, workspace tools) and Seam 2 model fixtures (OpenAI/Grok, no live network in default CI).
-
-```bash
-cargo test --workspace
-cargo run -p keryx-worker   # requires KERYX_OPERATOR_TOKEN; binds 127.0.0.1 only
-```
-
-**Model providers:** official API keys (`openai`, `grok`) and optional consumer web sessions (`openai_web`, `grok_web`) via operator-exported cookies/tokens — see `docs/deploy/consumer-web-sessions.md` and ADR 0010. Prefer API keys when available.
-
-Deploy notes: `docs/deploy/tailnet-edge.md`. Live model opt-in: `docs/deploy/live-model-verification.md`.
+- Opaque “do anything” automation without policy
+- Public internet bind or multi-tenant SaaS
+- Shell/exec and browser tools in v1
 
 ## Name
 
@@ -61,4 +193,9 @@ Deploy notes: `docs/deploy/tailnet-edge.md`. Live model opt-in: `docs/deploy/liv
 
 ## License
 
-License to be decided when the first implementation lands.
+Licensed under either of:
+
+- Apache License, Version 2.0 ([LICENSE-APACHE](LICENSE-APACHE))
+- MIT license ([LICENSE-MIT](LICENSE-MIT))
+
+at your option.

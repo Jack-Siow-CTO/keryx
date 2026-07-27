@@ -4,6 +4,7 @@
 
 mod auth;
 mod chatgpt;
+mod codex;
 mod error;
 mod grok;
 mod parse;
@@ -12,5 +13,6 @@ pub use auth::{
     load_secret, load_secret_pair, read_headers_file, ConsumerWebAuth, ConsumerWebConfig,
 };
 pub use chatgpt::ChatGptWebProvider;
+pub use codex::ChatGptCodexProvider;
 pub use error::redact_secrets;
 pub use grok::GrokWebProvider;

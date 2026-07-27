@@ -2,27 +2,66 @@
 
 mod config;
 
+use clap::{Parser, Subcommand};
 use config::WorkerConfig;
 use keryx_api::{router, AppState, OperatorTokenTable};
 use keryx_app::{ControlPlane, DenyAllTools, SessionStore};
 use keryx_model::{
-    ChatGptWebProvider, FakeModelProvider, GrokWebProvider, MultiModelProvider,
-    OpenAiCompatibleConfig, OpenAiCompatibleProvider,
+    ChatGptCodexProvider, ChatGptWebProvider, FakeModelProvider, GrokWebProvider,
+    MultiModelProvider, OpenAiCompatibleConfig, OpenAiCompatibleProvider,
 };
 use keryx_storage::SqliteSessionStore;
 use keryx_tools::WorkspaceFsTools;
 use std::collections::{HashMap, HashSet};
 use std::net::SocketAddr;
+use std::path::Path;
 use std::sync::Arc;
 use tokio::net::TcpListener;
 use tracing::{info, warn};
 
+const VERSION: &str = env!("CARGO_PKG_VERSION");
+
+#[derive(Debug, Parser)]
+#[command(
+    name = "keryx",
+    about = "Keryx agent Worker — loopback control plane",
+    version = VERSION
+)]
+struct Cli {
+    #[command(subcommand)]
+    command: Option<Command>,
+}
+
+#[derive(Debug, Subcommand)]
+enum Command {
+    /// Start the Worker control plane (default when no subcommand is given)
+    Serve,
+    /// Print version and exit
+    Version,
+    /// Check config readiness (token, bind, data dir, providers) without serving
+    Doctor,
+}
+
 #[tokio::main]
 async fn main() {
-    init_tracing();
-    if let Err(err) = run().await {
-        eprintln!("keryx worker failed: {err}");
-        std::process::exit(1);
+    let cli = Cli::parse();
+    match cli.command.unwrap_or(Command::Serve) {
+        Command::Version => {
+            println!("keryx {VERSION}");
+        }
+        Command::Doctor => {
+            if let Err(err) = doctor() {
+                eprintln!("keryx doctor: {err}");
+                std::process::exit(1);
+            }
+        }
+        Command::Serve => {
+            init_tracing();
+            if let Err(err) = run().await {
+                eprintln!("keryx worker failed: {err}");
+                std::process::exit(1);
+            }
+        }
     }
 }
 
@@ -82,6 +121,139 @@ async fn run() -> Result<(), String> {
     Ok(())
 }
 
+fn doctor() -> Result<(), String> {
+    println!("keryx doctor {VERSION}");
+    let config = WorkerConfig::from_env()?;
+
+    let mut issues = 0u32;
+    let mut warn_count = 0u32;
+
+    // Bind
+    if config.bind.ip().is_loopback() {
+        println!("ok   bind is loopback ({})", config.bind);
+    } else {
+        println!("fail bind is not loopback ({})", config.bind);
+        issues += 1;
+    }
+
+    // Operator tokens (never print secret values)
+    let n_tokens = config.operator_tokens.len();
+    if n_tokens == 0 {
+        println!("fail no operator tokens configured");
+        issues += 1;
+    } else {
+        let principals: Vec<&str> = config
+            .operator_tokens
+            .iter()
+            .map(|(_, p)| p.as_str())
+            .collect();
+        println!("ok   operator tokens configured: {n_tokens} (principals: {principals:?})");
+    }
+
+    // Data directory
+    match ensure_data_dir_writable(&config.data_dir) {
+        Ok(()) => println!("ok   data dir writable ({})", config.data_dir.display()),
+        Err(e) => {
+            println!(
+                "fail data dir not writable ({}): {e}",
+                config.data_dir.display()
+            );
+            issues += 1;
+        }
+    }
+
+    // Providers that would register
+    let mut available = vec!["fake".to_string()];
+    if config.openai.is_some() {
+        available.push("openai".into());
+    }
+    if config.grok.is_some() {
+        available.push("grok".into());
+    }
+    if config.openai_web.is_some() {
+        available.push("openai_web".into());
+    }
+    if std::env::var("CHATGPT_WEB_ACCESS_TOKEN").is_ok()
+        || std::env::var("CHATGPT_WEB_ACCESS_TOKEN_FILE").is_ok()
+    {
+        // openai_codex registers from env when the Codex/ChatGPT access token is present
+        available.push("openai_codex".into());
+    }
+    if config.grok_web.is_some() {
+        available.push("grok_web".into());
+    }
+    println!("ok   providers available: {available:?}");
+
+    if available.iter().any(|p| p == &config.default_provider) {
+        println!(
+            "ok   default provider '{}' is registered",
+            config.default_provider
+        );
+    } else {
+        println!(
+            "fail default provider '{}' is not available (have {available:?})",
+            config.default_provider
+        );
+        issues += 1;
+    }
+
+    if config.default_provider == "fake" {
+        println!(
+            "warn default provider is 'fake' — set OPENAI_API_KEY / XAI_API_KEY for real models"
+        );
+        warn_count += 1;
+    }
+
+    // Tools
+    if config.workspace_roots.is_empty() {
+        println!("warn no KERYX_WORKSPACE_ROOTS — file tools disabled (DenyAll)");
+        warn_count += 1;
+    } else {
+        println!(
+            "ok   workspace roots: {:?} allowed_tools={:?}",
+            config.workspace_roots, config.allowed_tools
+        );
+    }
+
+    // Optional live health probe if something is already listening
+    let health_url = format!("http://{}/health", config.bind);
+    match probe_health(&health_url) {
+        Ok(body) => println!("ok   live health at {health_url}: {body}"),
+        Err(e) => {
+            println!("info no live Worker at {health_url} ({e}) — start with: keryx");
+        }
+    }
+
+    println!();
+    if issues > 0 {
+        return Err(format!("{issues} check(s) failed, {warn_count} warning(s)"));
+    }
+    println!("doctor: all required checks passed ({warn_count} warning(s))");
+    println!("next: start with `keryx`, then run scripts/smoke.sh");
+    Ok(())
+}
+
+fn ensure_data_dir_writable(dir: &Path) -> Result<(), String> {
+    std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+    let probe = dir.join(".keryx-doctor-write-test");
+    std::fs::write(&probe, b"ok").map_err(|e| e.to_string())?;
+    std::fs::remove_file(&probe).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+fn probe_health(url: &str) -> Result<String, String> {
+    // Tiny blocking probe so doctor stays sync and dependency-light.
+    // Use std::process curl when available; otherwise skip with a clear message.
+    let output = std::process::Command::new("curl")
+        .args(["-fsS", "--max-time", "2", url])
+        .output()
+        .map_err(|e| format!("curl not available: {e}"))?;
+    if !output.status.success() {
+        return Err("connection failed".into());
+    }
+    String::from_utf8(output.stdout).map_err(|e| e.to_string())
+}
+
 fn build_model_provider(config: &WorkerConfig) -> Result<Arc<MultiModelProvider>, String> {
     let mut providers: HashMap<String, Arc<dyn keryx_app::ModelProvider>> = HashMap::new();
     providers.insert("fake".into(), Arc::new(FakeModelProvider::greeting()));
@@ -108,6 +280,16 @@ fn build_model_provider(config: &WorkerConfig) -> Result<Arc<MultiModelProvider>
         let provider = ChatGptWebProvider::new(web.clone()).map_err(|e| e.to_string())?;
         providers.insert("openai_web".into(), Arc::new(provider));
         info!("registered model provider openai_web (consumer session)");
+    }
+
+    // ChatGPT Plus/Pro subscription via Codex OAuth (not Platform API key).
+    match ChatGptCodexProvider::from_env() {
+        Ok(Some(provider)) => {
+            providers.insert("openai_codex".into(), Arc::new(provider));
+            info!("registered model provider openai_codex (ChatGPT subscription)");
+        }
+        Ok(None) => {}
+        Err(e) => return Err(format!("openai_codex config: {e}")),
     }
 
     if let Some(web) = &config.grok_web {

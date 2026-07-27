@@ -1,7 +1,9 @@
 //! Seam 2 — consumer web session providers (fixtures only; no live network).
 
 use keryx_app::{ModelProvider, ModelRequest};
-use keryx_model::{ChatGptWebProvider, ConsumerWebAuth, ConsumerWebConfig, GrokWebProvider};
+use keryx_model::{
+    ChatGptCodexProvider, ChatGptWebProvider, ConsumerWebAuth, ConsumerWebConfig, GrokWebProvider,
+};
 use serde_json::json;
 use wiremock::matchers::{header, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -153,6 +155,68 @@ async fn grok_web_sends_cookie_and_extra_headers() {
         serde_json::from_slice(&server.received_requests().await.unwrap()[0].body).unwrap();
     assert_eq!(body["stream"], true);
     assert!(body["message"].as_str().unwrap().contains("ping"));
+}
+
+#[tokio::test]
+async fn openai_codex_sends_responses_body_and_parses_output_text_delta() {
+    let server = MockServer::start().await;
+    let sse = "\
+event: response.output_text.delta\n\
+data: {\"type\":\"response.output_text.delta\",\"delta\":\"sub\"}\n\n\
+event: response.output_text.delta\n\
+data: {\"type\":\"response.output_text.delta\",\"delta\":\"-ok\"}\n\n\
+event: response.completed\n\
+data: {\"type\":\"response.completed\"}\n\n";
+    Mock::given(method("POST"))
+        .and(path("/backend-api/codex/responses"))
+        .and(header("authorization", "Bearer codex-access-token"))
+        .and(header("chatgpt-account-id", "acct-xyz"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "text/event-stream")
+                .set_body_string(sse),
+        )
+        .mount(&server)
+        .await;
+
+    let mut extra = std::collections::HashMap::new();
+    extra.insert("chatgpt-account-id".into(), "acct-xyz".into());
+    extra.insert("openai-beta".into(), "responses=experimental".into());
+
+    let provider = ChatGptCodexProvider::new_with_reasoning(
+        ConsumerWebConfig {
+            provider_name: "openai_codex".into(),
+            base_url: server.uri(),
+            path: "/backend-api/codex/responses".into(),
+            model: "gpt-5.6-sol".into(),
+            auth: ConsumerWebAuth {
+                cookie_header: None,
+                bearer_token: Some("codex-access-token".into()),
+                extra_headers: extra,
+            },
+            user_agent: "keryx-test".into(),
+        },
+        Some("low".into()),
+    )
+    .unwrap();
+
+    let response = provider
+        .complete(ModelRequest {
+            goal: "ping".into(),
+            transcript: vec![],
+            provider: Some("openai_codex".into()),
+        })
+        .await
+        .unwrap();
+
+    assert_eq!(response.content, "sub-ok");
+    let body: serde_json::Value =
+        serde_json::from_slice(&server.received_requests().await.unwrap()[0].body).unwrap();
+    assert_eq!(body["model"], "gpt-5.6-sol");
+    assert_eq!(body["stream"], true);
+    assert_eq!(body["store"], false);
+    assert_eq!(body["reasoning"]["effort"], "low");
+    assert_eq!(body["input"][0]["role"], "user");
 }
 
 #[tokio::test]

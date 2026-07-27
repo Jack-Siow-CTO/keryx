@@ -1,5 +1,7 @@
 # Keryx Tailnet edge deploy (jack-agent-worker style)
 
+**Prereq:** complete a local install and smoke first — [install.md](./install.md), [operator-checklist.md](./operator-checklist.md) (through Level 3 recommended). Example Caddyfile: [`deploy/Caddyfile.example`](../../deploy/Caddyfile.example).
+
 This document is the operator guide for hosting Keryx v1 on a private host
 with **Tailnet-only HTTPS** in front of a **loopback-only Worker**.
 

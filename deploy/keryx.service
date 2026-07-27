@@ -1,0 +1,26 @@
+[Unit]
+Description=Keryx agent Worker (loopback control plane)
+Documentation=https://github.com/Jack-Siow-CTO/keryx
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=keryx
+Group=keryx
+WorkingDirectory=/var/lib/keryx
+EnvironmentFile=-/etc/keryx/env
+ExecStart=/usr/local/bin/keryx
+Restart=on-failure
+RestartSec=3
+# Hardening (paths match install.sh --system)
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/var/lib/keryx
+# Secrets may live under /etc/keryx
+ReadOnlyPaths=/etc/keryx
+
+[Install]
+WantedBy=multi-user.target

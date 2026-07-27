@@ -50,7 +50,8 @@ impl WorkerConfig {
     /// | `XAI_BASE_URL` | Optional xAI base URL |
     /// | `CHATGPT_WEB_*` | Consumer ChatGPT web session (`openai_web`) — see `docs/deploy/consumer-web-sessions.md` |
     /// | `GROK_WEB_*` | Consumer Grok web session (`grok_web`) |
-    /// | `KERYX_DEFAULT_PROVIDER` | `fake` \| `openai` \| `grok` \| `openai_web` \| `grok_web` |
+    /// | `KERYX_DEFAULT_PROVIDER` | `fake` \| `openai` \| `grok` \| `openai_web` \| `openai_codex` \| `grok_web` |
+    /// | `CHATGPT_WEB_ACCESS_TOKEN*` / `CHATGPT_ACCOUNT_ID*` | ChatGPT subscription (Codex OAuth) for `openai_codex` |
     pub fn from_env() -> Result<Self, String> {
         let bind = parse_bind(env::var("KERYX_BIND").ok())?;
         let data_dir = env::var("KERYX_DATA_DIR")

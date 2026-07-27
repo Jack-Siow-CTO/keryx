@@ -1,0 +1,28 @@
+# Optional Docker path for Linux hosts.
+# Prefer native `./scripts/install.sh` on macOS and most personal hosts.
+#
+# Uses host networking so the Worker can keep its fail-closed loopback bind
+# (KERYX_BIND=127.0.0.1:8787). Docker Desktop on macOS does not map host
+# networking the same way — use the native binary there.
+#
+# Usage (Linux):
+#   cp .env.example .env   # set a real KERYX_OPERATOR_TOKEN
+#   docker compose up --build -d
+#   curl -sS http://127.0.0.1:8787/health
+
+services:
+  keryx:
+    build: .
+    container_name: keryx
+    restart: unless-stopped
+    network_mode: host
+    env_file:
+      - .env
+    environment:
+      KERYX_BIND: 127.0.0.1:8787
+      KERYX_DATA_DIR: /var/lib/keryx
+    volumes:
+      - keryx-data:/var/lib/keryx
+
+volumes:
+  keryx-data:

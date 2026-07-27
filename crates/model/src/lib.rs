@@ -6,8 +6,8 @@ mod multi;
 mod openai_compatible;
 
 pub use consumer::{
-    load_secret, load_secret_pair, read_headers_file, redact_secrets, ChatGptWebProvider,
-    ConsumerWebAuth, ConsumerWebConfig, GrokWebProvider,
+    load_secret, load_secret_pair, read_headers_file, redact_secrets, ChatGptCodexProvider,
+    ChatGptWebProvider, ConsumerWebAuth, ConsumerWebConfig, GrokWebProvider,
 };
 pub use fake::FakeModelProvider;
 pub use multi::MultiModelProvider;

@@ -1,0 +1,18 @@
+# Example Tailnet-only edge for Keryx.
+# Prereq: Worker installed and healthy on 127.0.0.1:8787
+# See docs/deploy/tailnet-edge.md
+#
+# Replace:
+#   keryx.your-tailnet.ts.net  — MagicDNS or hostname
+#   100.x.y.z                  — this host's Tailscale IPv4
+
+https://keryx.your-tailnet.ts.net {
+	bind 100.x.y.z
+	reverse_proxy 127.0.0.1:8787
+}
+
+# Rules:
+# - Bind only to Tailscale addresses (not public interfaces)
+# - Upstream is loopback only
+# - Do not enable Tailscale Funnel/Serve as the product path
+# - Application auth is still the operator bearer token
