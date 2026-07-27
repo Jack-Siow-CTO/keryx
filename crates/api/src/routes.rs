@@ -1,13 +1,16 @@
 use crate::auth::AuthPrincipal;
 use crate::error::ApiError;
 use crate::state::AppState;
-use axum::extract::{Path, State};
+use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use futures_util::stream::{self, Stream, StreamExt};
-use keryx_domain::{Run, RunEvent, RunId, RunStatus, Session, SessionId};
+use keryx_domain::{
+    Approval, ApprovalId, ApprovalStatus, Run, RunEvent, RunId, RunStatus, Schedule, ScheduleId,
+    ScheduleStatus, Session, SessionId,
+};
 use serde::{Deserialize, Serialize};
 use std::convert::Infallible;
 use std::pin::Pin;
@@ -25,6 +28,14 @@ pub fn router(state: AppState) -> Router {
         .route("/v1/runs/{run_id}/cancel", post(cancel_run))
         .route("/v1/runs/{run_id}/events", get(stream_run_events))
         .route("/v1/providers", get(list_providers))
+        .route("/v1/approvals", get(list_approvals))
+        .route("/v1/approvals/{approval_id}/approve", post(approve_approval))
+        .route("/v1/approvals/{approval_id}/deny", post(deny_approval))
+        .route("/v1/schedules", get(list_schedules).post(create_schedule))
+        .route("/v1/schedules/{schedule_id}/pause", post(pause_schedule))
+        .route("/v1/schedules/{schedule_id}/resume", post(resume_schedule))
+        .route("/v1/schedules/{schedule_id}/delete", post(delete_schedule))
+        .route("/v1/schedules/tick", post(tick_schedules))
         .with_state(state)
 }
 
@@ -92,6 +103,10 @@ struct RunResponse {
     principal_id: String,
     goal: String,
     status: RunStatus,
+    /// Run origin wire form (`control_plane`, `schedule`, `gateway:{platform}`).
+    origin: String,
+    /// Parent Run id when this is a Child Run.
+    parent_run_id: Option<String>,
     result: Option<String>,
 }
 
@@ -103,6 +118,8 @@ impl From<Run> for RunResponse {
             principal_id: run.principal_id.to_string(),
             goal: run.goal,
             status: run.status,
+            origin: run.origin.as_str(),
+            parent_run_id: run.parent_run_id.map(|id| id.to_string()),
             result: run.result,
         }
     }
@@ -161,6 +178,219 @@ async fn stream_run_events(
     let (replay, rx) = state.control.subscribe_run_events(run_id).await?;
     let stream = run_event_sse_stream(replay, rx);
     Ok(Sse::new(stream).keep_alive(KeepAlive::new().interval(Duration::from_secs(15))))
+}
+
+#[derive(Deserialize)]
+struct ListApprovalsQuery {
+    /// When true (default), only pending Approvals.
+    #[serde(default = "default_true")]
+    pending: bool,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+#[derive(Serialize)]
+struct ApprovalResponse {
+    id: String,
+    run_id: String,
+    action: String,
+    summary: String,
+    status: ApprovalStatus,
+    requested_by: String,
+    decided_by: Option<String>,
+}
+
+impl From<Approval> for ApprovalResponse {
+    fn from(a: Approval) -> Self {
+        Self {
+            id: a.id.to_string(),
+            run_id: a.run_id.to_string(),
+            action: a.action,
+            summary: a.summary,
+            status: a.status,
+            requested_by: a.requested_by.to_string(),
+            decided_by: a.decided_by.map(|p| p.to_string()),
+        }
+    }
+}
+
+#[derive(Serialize)]
+struct ApprovalsListResponse {
+    approvals: Vec<ApprovalResponse>,
+}
+
+async fn list_approvals(
+    State(state): State<AppState>,
+    AuthPrincipal(_principal): AuthPrincipal,
+    Query(q): Query<ListApprovalsQuery>,
+) -> Result<Json<ApprovalsListResponse>, ApiError> {
+    let approvals = state.control.list_approvals(q.pending).await?;
+    Ok(Json(ApprovalsListResponse {
+        approvals: approvals.into_iter().map(Into::into).collect(),
+    }))
+}
+
+async fn approve_approval(
+    State(state): State<AppState>,
+    AuthPrincipal(principal): AuthPrincipal,
+    Path(approval_id): Path<String>,
+) -> Result<Json<ApprovalResponse>, ApiError> {
+    let id = ApprovalId::from_str(&approval_id)
+        .map_err(|_| ApiError::bad_request("invalid approval id"))?;
+    let approval = state.control.approve(principal, id).await?;
+    Ok(Json(approval.into()))
+}
+
+async fn deny_approval(
+    State(state): State<AppState>,
+    AuthPrincipal(principal): AuthPrincipal,
+    Path(approval_id): Path<String>,
+) -> Result<Json<ApprovalResponse>, ApiError> {
+    let id = ApprovalId::from_str(&approval_id)
+        .map_err(|_| ApiError::bad_request("invalid approval id"))?;
+    let approval = state.control.deny(principal, id).await?;
+    Ok(Json(approval.into()))
+}
+
+#[derive(Deserialize)]
+struct CreateScheduleRequest {
+    goal: String,
+    /// Interval between fires in seconds.
+    interval_secs: u64,
+    /// Optional next fire time (unix epoch secs). Default: now.
+    next_fire_at: Option<i64>,
+    /// Optional frozen tool allowlist snapshot.
+    policy_tools: Option<Vec<String>>,
+}
+
+#[derive(Serialize)]
+struct ScheduleResponse {
+    id: String,
+    principal_id: String,
+    session_id: Option<String>,
+    goal: String,
+    interval_secs: u64,
+    status: ScheduleStatus,
+    next_fire_at: i64,
+    policy_tools: Vec<String>,
+    last_fired_at: Option<i64>,
+}
+
+impl From<Schedule> for ScheduleResponse {
+    fn from(s: Schedule) -> Self {
+        Self {
+            id: s.id.to_string(),
+            principal_id: s.principal_id.to_string(),
+            session_id: s.session_id.map(|id| id.to_string()),
+            goal: s.goal,
+            interval_secs: s.interval_secs,
+            status: s.status,
+            next_fire_at: s.next_fire_at,
+            policy_tools: s.policy_tools,
+            last_fired_at: s.last_fired_at,
+        }
+    }
+}
+
+#[derive(Serialize)]
+struct SchedulesListResponse {
+    schedules: Vec<ScheduleResponse>,
+}
+
+async fn create_schedule(
+    State(state): State<AppState>,
+    AuthPrincipal(principal): AuthPrincipal,
+    Json(body): Json<CreateScheduleRequest>,
+) -> Result<(StatusCode, Json<ScheduleResponse>), ApiError> {
+    if body.goal.trim().is_empty() {
+        return Err(ApiError::bad_request("goal must not be empty"));
+    }
+    if body.interval_secs == 0 {
+        return Err(ApiError::bad_request("interval_secs must be >= 1"));
+    }
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
+    let schedule = state
+        .control
+        .create_schedule(
+            principal,
+            body.goal,
+            body.interval_secs,
+            body.next_fire_at.unwrap_or(now),
+            body.policy_tools,
+        )
+        .await?;
+    Ok((StatusCode::CREATED, Json(schedule.into())))
+}
+
+async fn list_schedules(
+    State(state): State<AppState>,
+    AuthPrincipal(_principal): AuthPrincipal,
+) -> Result<Json<SchedulesListResponse>, ApiError> {
+    let schedules = state.control.list_schedules().await?;
+    Ok(Json(SchedulesListResponse {
+        schedules: schedules.into_iter().map(Into::into).collect(),
+    }))
+}
+
+async fn pause_schedule(
+    State(state): State<AppState>,
+    AuthPrincipal(_principal): AuthPrincipal,
+    Path(schedule_id): Path<String>,
+) -> Result<Json<ScheduleResponse>, ApiError> {
+    let id = ScheduleId::from_str(&schedule_id)
+        .map_err(|_| ApiError::bad_request("invalid schedule id"))?;
+    Ok(Json(state.control.pause_schedule(id).await?.into()))
+}
+
+async fn resume_schedule(
+    State(state): State<AppState>,
+    AuthPrincipal(_principal): AuthPrincipal,
+    Path(schedule_id): Path<String>,
+) -> Result<Json<ScheduleResponse>, ApiError> {
+    let id = ScheduleId::from_str(&schedule_id)
+        .map_err(|_| ApiError::bad_request("invalid schedule id"))?;
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
+    Ok(Json(state.control.resume_schedule(id, now).await?.into()))
+}
+
+async fn delete_schedule(
+    State(state): State<AppState>,
+    AuthPrincipal(_principal): AuthPrincipal,
+    Path(schedule_id): Path<String>,
+) -> Result<Json<ScheduleResponse>, ApiError> {
+    let id = ScheduleId::from_str(&schedule_id)
+        .map_err(|_| ApiError::bad_request("invalid schedule id"))?;
+    Ok(Json(state.control.delete_schedule(id).await?.into()))
+}
+
+#[derive(Deserialize)]
+struct TickSchedulesRequest {
+    /// Deterministic clock (unix epoch seconds) for Seam 1 / operator tests.
+    now: i64,
+}
+
+#[derive(Serialize)]
+struct TickSchedulesResponse {
+    started_runs: Vec<RunResponse>,
+}
+
+async fn tick_schedules(
+    State(state): State<AppState>,
+    AuthPrincipal(_principal): AuthPrincipal,
+    Json(body): Json<TickSchedulesRequest>,
+) -> Result<Json<TickSchedulesResponse>, ApiError> {
+    let runs = state.control.tick_schedules(body.now).await?;
+    Ok(Json(TickSchedulesResponse {
+        started_runs: runs.into_iter().map(Into::into).collect(),
+    }))
 }
 
 type LiveStream = Pin<Box<dyn Stream<Item = RunEvent> + Send>>;

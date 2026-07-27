@@ -1,4 +1,5 @@
 use keryx_app::{RunBudgets, RunLimits};
+use keryx_tools::McpConfig;
 use std::env;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::PathBuf;
@@ -18,6 +19,16 @@ pub struct WorkerConfig {
     pub budgets: RunBudgets,
     pub workspace_roots: Vec<PathBuf>,
     pub allowed_tools: Vec<String>,
+    /// Operator Soul document path (personality / standing instructions).
+    pub soul_path: Option<PathBuf>,
+    /// Workspace-relative Context file paths to attach to Runs.
+    pub context_files: Vec<String>,
+    /// Static MCP client config (from `KERYX_MCP_CONFIG` JSON file). Apply = restart.
+    pub mcp_config: Option<McpConfig>,
+    /// Path used to load MCP config (doctor only; never secret values).
+    pub mcp_config_path: Option<PathBuf>,
+    /// Extra exact tool names merged into control_plane Policy (`KERYX_POLICY_EXTRA_TOOLS`).
+    pub policy_extra_tools: Vec<String>,
 }
 
 impl WorkerConfig {
@@ -32,6 +43,8 @@ impl WorkerConfig {
     /// | `KERYX_GLOBAL_ACTIVE_CAP` | Concurrent Active Runs across Sessions |
     /// | `KERYX_WORKSPACE_ROOTS` | Colon-separated allowlisted roots |
     /// | `KERYX_DEFAULT_PROVIDER` | Real provider key when multiple are registered |
+    /// | `KERYX_MCP_CONFIG` | Path to MCP servers JSON (static; restart to apply) |
+    /// | `KERYX_POLICY_EXTRA_TOOLS` | Comma-separated exact tool names for control_plane Policy |
     /// | `OPENAI_*` / `XAI_*` / `CHATGPT_*` / `GROK_WEB_*` | Model provider secrets — see registry |
     pub fn from_env() -> Result<Self, String> {
         let bind = parse_bind(env::var("KERYX_BIND").ok())?;
@@ -82,7 +95,58 @@ impl WorkerConfig {
                     .map(str::to_string)
                     .collect()
             })
-            .unwrap_or_else(|| vec!["read_file".into(), "write_file".into()]);
+            .unwrap_or_else(|| {
+                vec![
+                    "read_file".into(),
+                    "write_file".into(),
+                    "apply_patch".into(),
+                    "search_files".into(),
+                    "web_search".into(),
+                    "web_extract".into(),
+                    "memory_read".into(),
+                    "memory_write".into(),
+                    "memory_update".into(),
+                    "memory_delete".into(),
+                    "memory_search".into(),
+                    "session_search".into(),
+                    "run_terminal".into(),
+                ]
+            });
+
+        let soul_path = env::var("KERYX_SOUL_PATH")
+            .ok()
+            .filter(|s| !s.is_empty())
+            .map(PathBuf::from);
+        let context_files = env::var("KERYX_CONTEXT_FILES")
+            .ok()
+            .map(|s| {
+                s.split(':')
+                    .map(str::trim)
+                    .filter(|p| !p.is_empty())
+                    .map(str::to_string)
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        let (mcp_config_path, mcp_config) = match env::var("KERYX_MCP_CONFIG") {
+            Ok(p) if !p.trim().is_empty() => {
+                let path = PathBuf::from(p);
+                let cfg = keryx_tools::load_mcp_config(&path)?;
+                (Some(path), Some(cfg))
+            }
+            _ => (None, None),
+        };
+
+        let policy_extra_tools = env::var("KERYX_POLICY_EXTRA_TOOLS")
+            .ok()
+            .map(|s| {
+                s.split(',')
+                    .map(str::trim)
+                    .filter(|t| !t.is_empty())
+                    .map(str::to_string)
+                    .collect()
+            })
+            .unwrap_or_default();
 
         Ok(Self {
             bind,
@@ -96,6 +160,11 @@ impl WorkerConfig {
             },
             workspace_roots,
             allowed_tools,
+            soul_path,
+            context_files,
+            mcp_config,
+            mcp_config_path,
+            policy_extra_tools,
         })
     }
 

@@ -60,6 +60,7 @@ async fn openai_web_sends_bearer_and_cookie_and_parses_sse() {
             transcript: vec![],
             provider: Some("openai_web".into()),
             model: None,
+            tools: vec![],
         })
         .await
         .unwrap();
@@ -105,6 +106,7 @@ async fn openai_web_maps_401_without_echoing_secrets() {
             transcript: vec![],
             provider: None,
             model: None,
+            tools: vec![],
         })
         .await
         .unwrap_err();
@@ -152,6 +154,7 @@ async fn grok_web_sends_cookie_and_extra_headers() {
             transcript: vec![],
             provider: Some("grok_web".into()),
             model: None,
+            tools: vec![],
         })
         .await
         .unwrap();
@@ -213,6 +216,7 @@ data: {\"type\":\"response.completed\"}\n\n";
             transcript: vec![],
             provider: Some("openai_codex".into()),
             model: None,
+            tools: vec![],
         })
         .await
         .unwrap();
@@ -265,6 +269,7 @@ async fn grok_web_defaults_include_reasoning_medium_when_set() {
             transcript: vec![],
             provider: Some("grok_web".into()),
             model: None,
+            tools: vec![],
         })
         .await
         .unwrap();
@@ -307,6 +312,7 @@ async fn grok_web_json_fallback() {
             transcript: vec![],
             provider: None,
             model: None,
+            tools: vec![],
         })
         .await
         .unwrap();

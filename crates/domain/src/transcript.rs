@@ -5,6 +5,8 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum MessageRole {
+    /// Operator Soul / workspace Context files / standing instructions (not Memory, not Skill).
+    System,
     User,
     Assistant,
     Tool,
@@ -18,6 +20,14 @@ pub struct TranscriptMessage {
 }
 
 impl TranscriptMessage {
+    #[must_use]
+    pub fn system(content: impl Into<String>) -> Self {
+        Self {
+            role: MessageRole::System,
+            content: content.into(),
+        }
+    }
+
     #[must_use]
     pub fn user(content: impl Into<String>) -> Self {
         Self {

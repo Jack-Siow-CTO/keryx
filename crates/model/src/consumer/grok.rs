@@ -82,6 +82,7 @@ impl GrokWebProvider {
         let mut parts = Vec::new();
         for msg in &request.transcript {
             let label = match msg.role {
+                MessageRole::System => "system",
                 MessageRole::User => "user",
                 MessageRole::Assistant => "assistant",
                 MessageRole::Tool => "tool",

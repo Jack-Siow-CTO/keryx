@@ -18,6 +18,12 @@ pub enum AppError {
     GlobalCapExceeded { cap: usize },
     #[error("run is not active")]
     RunNotActive,
+    #[error("approval not found")]
+    ApprovalNotFound,
+    #[error("approval is not pending")]
+    ApprovalNotPending,
+    #[error("schedule not found")]
+    ScheduleNotFound,
     #[error("store error: {0}")]
     Store(String),
     #[error("model provider error: {0}")]

@@ -793,9 +793,23 @@ dependencies = [
  "async-trait",
  "keryx-domain",
  "serde_json",
+ "tempfile",
  "thiserror",
  "tokio",
  "tokio-util",
+ "url",
+]
+
+[[package]]
+name = "keryx-cli"
+version = "0.1.0"
+dependencies = [
+ "clap",
+ "futures-util",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tokio",
 ]
 
 [[package]]
@@ -805,6 +819,23 @@ dependencies = [
  "serde",
  "thiserror",
  "uuid",
+]
+
+[[package]]
+name = "keryx-gateway"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "keryx-app",
+ "keryx-domain",
+ "keryx-model",
+ "keryx-storage",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]
@@ -834,6 +865,7 @@ dependencies = [
  "keryx-app",
  "keryx-domain",
  "rusqlite",
+ "serde_json",
  "tempfile",
  "tokio",
 ]
@@ -845,9 +877,14 @@ dependencies = [
  "async-trait",
  "keryx-app",
  "keryx-domain",
+ "reqwest",
+ "serde",
  "serde_json",
  "tempfile",
  "tokio",
+ "url",
+ "uuid",
+ "wiremock",
 ]
 
 [[package]]
@@ -860,6 +897,7 @@ dependencies = [
  "keryx-api",
  "keryx-app",
  "keryx-domain",
+ "keryx-gateway",
  "keryx-model",
  "keryx-storage",
  "keryx-tools",

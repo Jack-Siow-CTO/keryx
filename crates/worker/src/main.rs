@@ -5,14 +5,21 @@ mod config;
 use clap::{Parser, Subcommand};
 use config::WorkerConfig;
 use keryx_api::{router, AppState, OperatorTokenTable, ProviderCatalog, ProviderInfo};
-use keryx_app::{ControlPlane, DenyAllTools, SessionStore};
+use keryx_app::{ControlPlane, DenyAllTools, RunContextConfig, SessionStore};
+use keryx_domain::{Principal, PrincipalId, RunOrigin};
+use keryx_gateway::{run_telegram_long_poll, ChatAllowlist};
 use keryx_model::{register_from_env, RegisteredProviders};
 use keryx_storage::SqliteSessionStore;
-use keryx_tools::WorkspaceFsTools;
+use keryx_tools::{
+    build_mcp_runtimes, CompositeTools, HttpWebExtract, McpDoctorReport, McpRuntimeBundle,
+    MemoryTools, SystemExecRunner, TerminalTools, UnconfiguredWebSearch, WebTools,
+    WorkspaceFsTools,
+};
 use std::collections::HashSet;
 use std::net::SocketAddr;
 use std::path::Path;
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::net::TcpListener;
 use tracing::{info, warn};
 
@@ -47,7 +54,7 @@ async fn main() {
             println!("keryx {VERSION}");
         }
         Command::Doctor => {
-            if let Err(err) = doctor() {
+            if let Err(err) = doctor().await {
                 eprintln!("keryx doctor: {err}");
                 std::process::exit(1);
             }
@@ -80,21 +87,78 @@ async fn run() -> Result<(), String> {
     );
 
     let store = Arc::new(SqliteSessionStore::open(&config.data_dir)?);
-    let tools = build_tools(&config);
-    let control = Arc::new(ControlPlane::with_tools(
+    let mcp_bundle = load_mcp_bundle(&config).await;
+    let tools = build_tools(&config, Arc::clone(&store), mcp_bundle.runtime.clone());
+    let run_context = RunContextConfig {
+        soul_path: config.soul_path.clone(),
+        context_files: config.context_files.clone(),
+        workspace_roots: config.workspace_roots.clone(),
+        missing: keryx_app::MissingContextPolicy::Soft,
+    };
+    let mut control = ControlPlane::with_tools_and_context(
         Arc::clone(&store),
         Arc::clone(&registered.multi),
         config.run_limits(),
         tools,
-    ));
+        run_context,
+    );
+    // Connect ≠ allow: only config policy_allowlist + KERYX_POLICY_EXTRA_TOOLS.
+    let mut extras = mcp_bundle.control_plane_extra.clone();
+    extras.extend(config.policy_extra_tools.iter().cloned());
+    if !extras.is_empty() {
+        control = control.with_control_plane_extra_tools(extras);
+    }
+    if !mcp_bundle.high_blast.is_empty() {
+        control = control.with_high_blast_tools(mcp_bundle.high_blast.clone());
+    }
+    let control = Arc::new(control);
+    // Keep MCP registry alive for stdio child lifetime / shutdown Drop.
+    let _mcp_keep_alive = mcp_bundle.runtime.clone();
 
     let mut tokens = OperatorTokenTable::new();
     for (token, principal) in &config.operator_tokens {
         tokens = tokens.with_token(token, principal.as_str());
     }
     let catalog = catalog_from_registered(&registered);
+    // Keep a direct Arc for Gateways (HTTP holds its own clone via AppState).
+    let control_for_gateway = Arc::clone(&control);
     let state = AppState::with_providers(control, tokens, catalog);
     let app = router(state);
+
+    // Telegram Gateway long-poll (optional; fail closed if token invalid at getMe).
+    if let Ok(tg_token) = std::env::var("KERYX_TELEGRAM_BOT_TOKEN") {
+        if !tg_token.trim().is_empty() {
+            let allow = ChatAllowlist::from_env_csv(
+                std::env::var("KERYX_TELEGRAM_ALLOWED_CHAT_IDS").ok(),
+            );
+            let principal_name = config
+                .operator_tokens
+                .first()
+                .map(|(_, p)| p.clone())
+                .unwrap_or_else(|| "operator".into());
+            let principal = Principal {
+                id: PrincipalId::new(principal_name),
+            };
+            let max_wait_secs = std::env::var("KERYX_TELEGRAM_RUN_TIMEOUT_SECS")
+                .ok()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(180u64);
+            tokio::spawn(async move {
+                info!("telegram gateway task starting");
+                if let Err(e) = run_telegram_long_poll(
+                    control_for_gateway,
+                    tg_token,
+                    principal,
+                    allow,
+                    Duration::from_secs(max_wait_secs),
+                )
+                .await
+                {
+                    warn!(error = %e, "telegram gateway stopped");
+                }
+            });
+        }
+    }
 
     let listener = TcpListener::bind(config.bind)
         .await
@@ -139,7 +203,7 @@ fn catalog_from_registered(registered: &RegisteredProviders) -> ProviderCatalog 
     }
 }
 
-fn doctor() -> Result<(), String> {
+async fn doctor() -> Result<(), String> {
     println!("keryx doctor {VERSION}");
     let config = WorkerConfig::from_env()?;
 
@@ -215,6 +279,90 @@ fn doctor() -> Result<(), String> {
         );
     }
 
+    // Soul + Context files (soft-missing; distinct from Memory/Skill)
+    match &config.soul_path {
+        Some(p) if p.is_file() => println!("ok   Soul path {}", p.display()),
+        Some(p) => {
+            println!(
+                "warn Soul path configured but missing ({}) — Runs continue without Soul",
+                p.display()
+            );
+            warn_count += 1;
+        }
+        None => println!("info no KERYX_SOUL_PATH — Runs start without Soul"),
+    }
+    if config.context_files.is_empty() {
+        println!("info no KERYX_CONTEXT_FILES — no workspace Context auto-attach");
+    } else {
+        println!(
+            "ok   Context files configured: {:?}",
+            config.context_files
+        );
+    }
+
+    // v2 readiness surfaces
+    let skills = std::env::var("KERYX_SKILLS_ROOT").unwrap_or_else(|_| "./skills".into());
+    if std::path::Path::new(&skills).is_dir() {
+        println!("ok   skills root {skills}");
+    } else {
+        println!("warn skills root missing ({skills}) — create or set KERYX_SKILLS_ROOT");
+        warn_count += 1;
+    }
+    match std::env::var("KERYX_TELEGRAM_BOT_TOKEN") {
+        Ok(t) if !t.is_empty() => println!("ok   Telegram Gateway token configured"),
+        _ => println!("info Telegram Gateway disabled (no KERYX_TELEGRAM_BOT_TOKEN)"),
+    }
+    match std::env::var("KERYX_DISCORD_BOT_TOKEN") {
+        Ok(t) if !t.is_empty() => println!("ok   Discord Gateway token configured"),
+        _ => println!("info Discord Gateway disabled (no KERYX_DISCORD_BOT_TOKEN)"),
+    }
+    match std::process::Command::new("docker")
+        .args(["info"])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+    {
+        Ok(s) if s.success() => println!("ok   Docker available for exec backend"),
+        _ => {
+            println!("warn Docker not available — reduced-origin local exec stays denied");
+            warn_count += 1;
+        }
+    }
+    if std::env::var("KERYX_BIND")
+        .ok()
+        .and_then(|b| b.parse::<std::net::SocketAddr>().ok())
+        .is_some_and(|a| !a.ip().is_loopback())
+    {
+        println!("fail public/non-loopback bind is dangerous misconfig");
+        issues += 1;
+    }
+    // MCP client servers (static config; never print secret values)
+    match &config.mcp_config {
+        Some(cfg) => {
+            if let Some(path) = &config.mcp_config_path {
+                println!(
+                    "ok   MCP config path {} ({} server(s))",
+                    path.display(),
+                    cfg.servers.len()
+                );
+            }
+            // Doctor connect attempt (fail closed per server; Worker still healthy).
+            let bundle = build_mcp_runtimes(cfg).await;
+            if !config.policy_extra_tools.is_empty() {
+                println!(
+                    "ok   KERYX_POLICY_EXTRA_TOOLS: {:?}",
+                    config.policy_extra_tools
+                );
+            }
+            bundle.doctor.print_lines();
+            // Drop registry so stdio children exit after doctor.
+            drop(bundle);
+        }
+        None => {
+            McpDoctorReport::default().print_lines();
+        }
+    }
+
     // Optional live health probe if something is already listening
     let health_url = format!("http://{}/health", config.bind);
     match probe_health(&health_url) {
@@ -253,15 +401,129 @@ fn probe_health(url: &str) -> Result<String, String> {
     String::from_utf8(output.stdout).map_err(|e| e.to_string())
 }
 
-fn build_tools(config: &WorkerConfig) -> Arc<dyn keryx_app::ToolRuntime> {
-    if config.workspace_roots.is_empty() {
+async fn load_mcp_bundle(config: &WorkerConfig) -> McpRuntimeBundle {
+    match &config.mcp_config {
+        Some(cfg) => {
+            let bundle = build_mcp_runtimes(cfg).await;
+            for s in &bundle.doctor.servers {
+                if s.connected {
+                    info!(
+                        server_id = %s.server_id,
+                        tools = s.discovered_tools.len(),
+                        "MCP server connected"
+                    );
+                } else {
+                    warn!(
+                        server_id = %s.server_id,
+                        error = s.error.as_deref().unwrap_or("unknown"),
+                        "MCP server failed (contributes zero tools)"
+                    );
+                }
+            }
+            bundle
+        }
+        None => McpRuntimeBundle {
+            runtime: None,
+            control_plane_extra: Vec::new(),
+            high_blast: Vec::new(),
+            doctor: McpDoctorReport::default(),
+        },
+    }
+}
+
+fn build_tools(
+    config: &WorkerConfig,
+    store: Arc<SqliteSessionStore>,
+    mcp: Option<Arc<keryx_tools::McpClientRegistry>>,
+) -> Arc<dyn keryx_app::ToolRuntime> {
+    let allowed: HashSet<String> = config.allowed_tools.iter().cloned().collect();
+    let mut composite = CompositeTools::new();
+
+    let fs_names: HashSet<String> = ["read_file", "write_file", "apply_patch", "search_files"]
+        .into_iter()
+        .map(str::to_string)
+        .filter(|n| allowed.contains(n))
+        .collect();
+    if !fs_names.is_empty() && !config.workspace_roots.is_empty() {
+        composite = composite.with(
+            fs_names,
+            Arc::new(WorkspaceFsTools::new(
+                config.workspace_roots.clone(),
+                allowed.clone(),
+            )),
+        );
+    }
+
+    let web_names: HashSet<String> = ["web_search", "web_extract"]
+        .into_iter()
+        .map(str::to_string)
+        .filter(|n| allowed.contains(n))
+        .collect();
+    if !web_names.is_empty() {
+        let search: Arc<dyn keryx_tools::WebSearchBackend> = Arc::new(UnconfiguredWebSearch);
+        let extract: Arc<dyn keryx_tools::WebExtractBackend> = match HttpWebExtract::new() {
+            Ok(http) => Arc::new(http),
+            Err(_) => Arc::new(keryx_tools::FixedWebExtract::default()),
+        };
+        composite = composite.with(
+            web_names,
+            Arc::new(WebTools::new(allowed.clone(), search, extract)),
+        );
+    }
+
+    let mem_names: HashSet<String> = [
+        "memory_read",
+        "memory_write",
+        "memory_update",
+        "memory_delete",
+        "memory_search",
+        "session_search",
+    ]
+    .into_iter()
+    .map(str::to_string)
+    .filter(|n| allowed.contains(n))
+    .collect();
+    if !mem_names.is_empty() {
+        composite = composite.with(
+            mem_names.clone(),
+            Arc::new(MemoryTools::new(Arc::clone(&store), allowed.clone())),
+        );
+    }
+
+    let term_names: HashSet<String> = ["run_terminal", "shell_exec"]
+        .into_iter()
+        .map(str::to_string)
+        .filter(|n| allowed.contains(n))
+        .collect();
+    if !term_names.is_empty() {
+        // Worker default origin for static tool wiring is control_plane; per-run
+        // backend selection still honors Run origin inside TerminalTools when
+        // constructed with origin (here control_plane; reduced origins deny local).
+        let mut term = TerminalTools::new(
+            allowed,
+            Arc::new(SystemExecRunner::new()),
+            RunOrigin::ControlPlane,
+        );
+        if !config.workspace_roots.is_empty() {
+            term = term.with_cwd_roots(config.workspace_roots.clone());
+        }
+        composite = composite.with(term_names, Arc::new(term));
+    }
+
+    // MCP client tools: registered independently of KERYX_ALLOWED_TOOLS.
+    // Policy still gates invoke (connect ≠ allow).
+    if let Some(registry) = mcp {
+        let names = registry.registered_names();
+        if !names.is_empty() {
+            info!(count = names.len(), "registering MCP client tools");
+            composite = composite.with(names, registry);
+        }
+    }
+
+    if composite.is_empty() {
         return Arc::new(DenyAllTools);
     }
-    let allowed: HashSet<String> = config.allowed_tools.iter().cloned().collect();
-    Arc::new(WorkspaceFsTools::new(
-        config.workspace_roots.clone(),
-        allowed,
-    ))
+    Arc::new(composite)
 }
 
 async fn shutdown_signal() {

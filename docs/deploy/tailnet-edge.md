@@ -44,7 +44,7 @@ Secrets load from the environment or secret **files** (never commit keys).
 | `KERYX_DATA_DIR` | no | SQLite data directory (default `./data`) |
 | `KERYX_GLOBAL_ACTIVE_CAP` | no | Max concurrent Active Runs across Sessions (default `2`) |
 | `KERYX_WORKSPACE_ROOTS` | no | Colon-separated Workspace roots for file tools |
-| `KERYX_ALLOWED_TOOLS` | no | Comma-separated tool allowlist (default `read_file,write_file`) |
+| `KERYX_ALLOWED_TOOLS` | no | Comma-separated tool allowlist (default `read_file,write_file,apply_patch,search_files`) |
 | `KERYX_DEFAULT_PROVIDER` | when multiple | `openai` \| `grok` \| `openai_codex` \| … (no fake) |
 | `OPENAI_API_KEY` / `OPENAI_API_KEY_FILE` | for OpenAI | API credentials |
 | `OPENAI_MODEL` | no | Default model id |

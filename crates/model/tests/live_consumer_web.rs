@@ -35,6 +35,7 @@ async fn live_openai_codex_completion() {
             transcript: vec![],
             provider: Some("openai_codex".into()),
             model: None,
+            tools: vec![],
         })
         .await
         .expect("live openai_codex completion");
@@ -59,6 +60,7 @@ async fn live_openai_web_completion() {
             transcript: vec![],
             provider: Some("openai_web".into()),
             model: None,
+            tools: vec![],
         })
         .await
         .expect("live openai_web completion");
@@ -83,6 +85,7 @@ async fn live_grok_web_completion() {
             transcript: vec![],
             provider: Some("grok_web".into()),
             model: None,
+            tools: vec![],
         })
         .await
         .expect("live grok_web completion");

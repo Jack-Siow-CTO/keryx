@@ -1,6 +1,6 @@
 # Keryx
 
-Keryx is a Hermes-inspired agentic messenger: a long-running worker that accepts intent, runs bounded agent loops with tools, and returns outcomes.
+Keryx is a personal agent OS: a long-running Worker that accepts intent from a control plane and Gateways, runs bounded agent loops with tools, memory, and skills, and returns outcomes under Policy.
 
 ## Language
 
@@ -16,45 +16,85 @@ _Avoid_: Conversation, chat, thread (unless UI-facing labels)
 One bounded execution of the agent loop toward a goal (or until a stop policy fires). Cancelable and budgeted independently of other Runs.
 _Avoid_: Job, task, step, turn (a turn may be *inside* a Run)
 
+**Child Run**:
+A Run spawned by a parent Run to perform delegated work with its own transcript slice, budgets, and tool Policy subset.
+_Avoid_: Subagent process, thread, fork (unless referring to OS processes)
+
 **Agent loop**:
 The iterative cycle within a Run: model reasoning → optional tool calls → observation → continue or stop.
 _Avoid_: Pipeline, workflow (reserved for multi-step external orchestration if introduced later)
 
 **Active Run**:
-The single Run currently executing for a given Session. A Session admits at most one Active Run at a time; further Runs wait or are rejected per policy.
+The single root Run currently executing for a given Session. Child Runs may run under that root; the Session still admits only one Active root Run at a time.
 _Avoid_: Current job, in-flight task
 
 **Control plane**:
-The Worker-facing API that creates Sessions, starts and cancels Runs, and streams Run events and results.
-_Avoid_: Frontend, gateway (the gateway is the edge, not the control plane)
+The Worker-facing API that creates Sessions, starts and cancels Runs, manages Approvals, Schedules, and Memory, and streams Run events and results. System of record for work.
+_Avoid_: Frontend, gateway (the Gateway is messaging, not the control plane)
 
 **Edge**:
 The Tailnet-only reverse proxy that terminates HTTPS and forwards to the Worker's loopback control plane. Not part of the agent domain logic.
-_Avoid_: Public API, tunnel, Serve/Funnel
+_Avoid_: Public API, tunnel, Serve/Funnel, Gateway
+
+**Gateway**:
+A messaging adapter that maps external chat platforms to control-plane Sessions and Runs (and delivers outcomes back).
+_Avoid_: Edge, webhook service (alone), bot framework
+
+**Run origin**:
+The channel that initiated a Run (control plane, a Gateway platform, or a Schedule). Policy and Approval requirements depend on origin.
+_Avoid_: Source, client type, transport
 
 **Principal**:
-The authenticated identity that initiates control-plane actions (create Session, start or cancel Run). v1 may map many devices to one operator token; the domain still records which Principal acted.
+The authenticated identity that initiates control-plane actions (create Session, start or cancel Run, approve high-blast work). v1/v2 may map many devices to one operator token; the domain still records which Principal acted.
 _Avoid_: User, account, tenant (until multi-human product needs them)
 
+**Approval**:
+An operator decision required before a high-blast action proceeds (for example exec, skill auto-apply outside trusted context, computer-use outside allowlists).
+_Avoid_: Permission prompt, OAuth consent
+
 **Model provider**:
-An adapter that turns a Run's conversation state into model completions (and optional tool-call requests). v1 ships OpenAI and Grok (xAI) providers first.
+An adapter that turns a Run's conversation state into model completions (and optional tool-call requests).
 _Avoid_: LLM, backend, brain
 
 **Tool**:
-A named, policy-gated capability a Run may invoke (for example workspace file read/write). Concrete tools are adapters; the core owns the interface and enforcement.
-_Avoid_: Function, skill, plugin (plugin reserved for future dynamic loading if ever needed)
+A named, policy-gated executable capability a Run may invoke (for example workspace file read, terminal, browser, or a namespaced MCP tool). Concrete tools are adapters; the core owns the interface and enforcement.
+_Avoid_: Function, plugin (plugin reserved for future dynamic native loading if ever needed), capability pack, integration (when meaning an installable product unit)
+
+**MCP server**:
+An operator-configured external Model Context Protocol peer that contributes Tools to the Worker under fixed namespaces and Policy. Long-tail product integrations (mail, chat APIs, home automation, …) enter as MCP servers, not first-party core Tools.
+_Avoid_: Plugin, capability pack, native extension
+
+**Skill**:
+A versioned, load-on-demand procedure or knowledge package the agent may inject into a Run's context. Distinct from a Tool (skills are data; tools are executable). Skills may document how to use MCP Tools; they do not grant executable power.
+_Avoid_: Plugin, prompt pack, SOP (unless UI-facing)
+
+**Memory**:
+Durable, curated knowledge retained across Sessions (facts, preferences, project state). Distinct from Transcript.
+_Avoid_: Vector store, embeddings, RAG (implementation); chat history
+
+**Transcript**:
+The ordered Session history of messages and tool results available to subsequent Runs.
+_Avoid_: Chat log, context window (context window is a model limit, not stored state), Memory
+
+**Soul**:
+The operator-level personality and standing instructions document loaded into Runs.
+_Avoid_: System prompt (alone), persona pack, jailbreak file
+
+**Context file**:
+A project- or workspace-scoped document automatically or on demand attached to Runs for that Workspace.
+_Avoid_: README dump, .env, Soul
 
 **Policy**:
-The constraints applied to a Session or Run: tool allowlists, workspace roots, budgets (time, tokens, tool calls), and cancel rules.
+The constraints applied to a Session or Run: tool allowlists (including explicit MCP tool names), workspace roots, budgets (time, tokens, tool calls), Run origin rules, Approval rules, and cancel rules. Discovering or enabling an MCP server does not by itself authorize its Tools.
 _Avoid_: Guardrails, permissions (OS permissions are separate)
 
 **Workspace**:
 An allowlisted filesystem root (or roots) within which file tools may operate for a Session/Run.
-_Avoid_: Sandbox, project (project may mean a git repo later)
+_Avoid_: Sandbox (sandbox is an exec isolation backend), project (project may mean a git repo later)
 
-**Transcript**:
-The ordered Session history of messages and tool results available to subsequent Runs.
-_Avoid_: Chat log, context window (context window is a model limit, not stored state)
+**Schedule**:
+A durable trigger that starts Runs on a cadence or at a time, with a frozen Policy snapshot and Run origin `schedule`.
+_Avoid_: Cron job (OS cron), timer, alarm
 
 **Run record**:
 The durable metadata and outcome of a Run (status, budgets consumed, result or failure reason, event history for debug/replay of observations). An interrupted Active Run is recorded as failed/interrupted, not resumed mid-loop.

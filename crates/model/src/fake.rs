@@ -12,9 +12,15 @@ pub struct FakeModelProvider {
     tool_calls: Option<Vec<ToolCall>>,
     delay: Option<Duration>,
     script: Mutex<Vec<ModelResponse>>,
+    /// Last tool names offered in a `complete` catalog (`request.tools`), for Policy ∩ catalog tests.
+    last_tools: Mutex<Vec<String>>,
 }
 
 impl FakeModelProvider {
+    fn empty_last_tools() -> Mutex<Vec<String>> {
+        Mutex::new(Vec::new())
+    }
+
     #[must_use]
     pub fn greeting() -> Self {
         Self {
@@ -23,6 +29,7 @@ impl FakeModelProvider {
             tool_calls: None,
             delay: None,
             script: Mutex::new(Vec::new()),
+            last_tools: Self::empty_last_tools(),
         }
     }
 
@@ -34,6 +41,7 @@ impl FakeModelProvider {
             tool_calls: None,
             delay: None,
             script: Mutex::new(Vec::new()),
+            last_tools: Self::empty_last_tools(),
         }
     }
 
@@ -46,6 +54,7 @@ impl FakeModelProvider {
             tool_calls: None,
             delay: None,
             script: Mutex::new(Vec::new()),
+            last_tools: Self::empty_last_tools(),
         }
     }
 
@@ -58,6 +67,7 @@ impl FakeModelProvider {
             tool_calls: None,
             delay: Some(delay),
             script: Mutex::new(Vec::new()),
+            last_tools: Self::empty_last_tools(),
         }
     }
 
@@ -77,6 +87,7 @@ impl FakeModelProvider {
             tool_calls: Some(tool_calls),
             delay: None,
             script: Mutex::new(Vec::new()),
+            last_tools: Self::empty_last_tools(),
         }
     }
 
@@ -88,6 +99,22 @@ impl FakeModelProvider {
             tool_calls: None,
             delay: None,
             script: Mutex::new(responses),
+            last_tools: Self::empty_last_tools(),
+        }
+    }
+
+    /// Tool names from the most recent `complete` request catalog (canonical internal names).
+    #[must_use]
+    pub fn last_tool_names(&self) -> Vec<String> {
+        self.last_tools
+            .lock()
+            .map(|g| g.clone())
+            .unwrap_or_default()
+    }
+
+    fn record_tools(&self, request: &ModelRequest) {
+        if let Ok(mut guard) = self.last_tools.lock() {
+            *guard = request.tools.iter().map(|t| t.name.clone()).collect();
         }
     }
 }
@@ -95,6 +122,8 @@ impl FakeModelProvider {
 #[async_trait]
 impl ModelProvider for FakeModelProvider {
     async fn complete(&self, request: ModelRequest) -> Result<ModelResponse, ModelError> {
+        self.record_tools(&request);
+
         if let Some(delay) = self.delay {
             tokio::time::sleep(delay).await;
         }

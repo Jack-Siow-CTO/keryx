@@ -2,6 +2,8 @@
 //!
 //! Depends on domain ports/types only—not concrete adapters (ADR 0008).
 
+mod approval_broker;
+mod context;
 mod error;
 mod events;
 mod limits;
@@ -11,13 +13,21 @@ mod service;
 mod store;
 mod tools;
 
+pub use approval_broker::ApprovalBroker;
+pub use context::{
+    load_run_context, path_targets_protected, resolve_context_path_jailed, LoadedRunContext,
+    MissingContextPolicy, RunContextConfig,
+};
 pub use error::AppError;
 pub use events::RunEventHub;
 pub use limits::{RunBudgets, RunLimits};
 pub use model::{ModelError, ModelProvider, ModelRequest, ModelResponse};
-pub use service::{ControlPlane, ControlPlaneService};
+pub use service::{ControlPlane, ControlPlaneService, APPROVAL_TIMEOUT};
 pub use store::SessionStore;
-pub use tools::{summarize_tool_args, DenyAllTools, ToolCall, ToolError, ToolResult, ToolRuntime};
+pub use tools::{
+    catalog_for_policy, summarize_tool_args, DenyAllTools, ToolCall, ToolError, ToolResult,
+    ToolRuntime, ToolSpec,
+};
 
 /// Workspace smoke: app crate depends on domain and is loadable.
 #[must_use]

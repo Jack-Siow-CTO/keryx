@@ -1,5 +1,7 @@
 # v1 capability surface: thin core, OpenAI + Grok models, fs tools, no exec
 
+Status: **accepted for v1**. v2 product direction is **ADR 0012** (personal agent OS); this ADR remains the v1 runtime surface until v2 is implemented.
+
 Core owns the agent loop, Session/Run lifecycle, tool interface, policy enforcement, and Run event log.
 
 **v1 Model providers (primary):** OpenAI and Grok (xAI) via **official API credentials** (API keys / base URLs / model IDs), using a shared OpenAI-compatible HTTP client shape where practical.
