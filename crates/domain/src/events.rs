@@ -15,13 +15,45 @@ pub struct RunEvent {
 pub enum RunEventKind {
     RunStarted,
     ModelStarted,
-    ModelDelta { text: String },
+    ModelDelta {
+        text: String,
+    },
     ModelFinished,
-    ToolStarted { name: String },
-    ToolFinished { name: String },
-    RunBudget { message: String },
+    ToolStarted {
+        name: String,
+    },
+    ToolFinished {
+        name: String,
+    },
+    /// Active Run is blocked on an Approval decision.
+    ApprovalWaiting {
+        approval_id: String,
+        action: String,
+        summary: String,
+    },
+    /// Approval was approved or denied.
+    ApprovalResolved {
+        approval_id: String,
+        decision: String,
+        principal_id: String,
+    },
+    /// Child Run spawned under the parent root.
+    ChildRunStarted {
+        child_run_id: String,
+        goal: String,
+    },
+    /// Child Run reached a terminal status.
+    ChildRunFinished {
+        child_run_id: String,
+        status: String,
+    },
+    RunBudget {
+        message: String,
+    },
     RunCompleted,
-    RunFailed { reason: String },
+    RunFailed {
+        reason: String,
+    },
     RunCancelled,
 }
 
@@ -36,6 +68,10 @@ impl RunEventKind {
             Self::ModelFinished => "model.finished",
             Self::ToolStarted { .. } => "tool.started",
             Self::ToolFinished { .. } => "tool.finished",
+            Self::ApprovalWaiting { .. } => "approval.waiting",
+            Self::ApprovalResolved { .. } => "approval.resolved",
+            Self::ChildRunStarted { .. } => "child_run.started",
+            Self::ChildRunFinished { .. } => "child_run.finished",
             Self::RunBudget { .. } => "run.budget",
             Self::RunCompleted => "run.completed",
             Self::RunFailed { .. } => "run.failed",

@@ -55,10 +55,14 @@ impl ApiError {
 impl From<AppError> for ApiError {
     fn from(value: AppError) -> Self {
         match value {
-            AppError::SessionNotFound | AppError::RunNotFound => Self::not_found(value.to_string()),
+            AppError::SessionNotFound
+            | AppError::RunNotFound
+            | AppError::ApprovalNotFound
+            | AppError::ScheduleNotFound => Self::not_found(value.to_string()),
             AppError::ActiveRunExists { .. }
             | AppError::GlobalCapExceeded { .. }
-            | AppError::RunNotActive => Self::conflict(value.to_string()),
+            | AppError::RunNotActive
+            | AppError::ApprovalNotPending => Self::conflict(value.to_string()),
             AppError::Store(msg) => Self::internal(msg),
             AppError::Model(err) => Self::internal(err.to_string()),
         }

@@ -1,7 +1,38 @@
-//! Keryx tool adapters (workspace file read/write under Policy and path jail).
+//! Keryx tool adapters (workspace file tools, web tools under Policy).
 
+mod browser;
+mod computer;
+mod execute_code;
+mod mcp;
+mod media;
+mod memory;
+mod operator;
+mod skills;
+mod terminal;
+mod web;
 mod workspace;
 
+pub use browser::{BrowserTools, IsolatedBrowserState};
+pub use computer::{ComputerUseTools, IsolatedDesktop};
+pub use execute_code::ExecuteCodeTools;
+pub use mcp::{
+    build_mcp_runtimes, load_mcp_config, mock_registry_from_peer, namespaced_tool_name,
+    parse_mcp_config_json, parse_namespaced_tool, validate_server_id, McpClientRegistry,
+    McpClientTools, McpConfig, McpDoctorReport, McpRuntimeBundle, McpServerConfig, McpServerExport,
+    McpServerHealth, McpSession, McpTransportConfig, MockMcpPeer, MCP_NAMESPACE_PREFIX,
+};
+pub use media::{MediaConfig, MediaTools};
+pub use memory::MemoryTools;
+pub use operator::{ClarifyQueue, OperatorTools, TodoState};
+pub use skills::{ensure_skills_root, SkillDraftStore, SkillsTools};
+pub use terminal::{
+    ExecBackend, ExecBackendRunner, FixedExecRunner, SystemExecRunner, TerminalTools,
+};
+pub use web::{
+    assert_resolved_public, is_public_ip, validate_public_http_url, CompositeTools,
+    FixedWebExtract, FixedWebSearch, HttpWebExtract, SearchHit, UnconfiguredWebSearch,
+    WebExtractBackend, WebSearchBackend, WebTools,
+};
 pub use workspace::{resolve_in_workspace, WorkspaceFsTools};
 
 /// Workspace smoke: tools adapter is loadable.
@@ -82,5 +113,159 @@ mod tests {
             .await
             .unwrap_err();
         assert!(err.to_string().contains("denied"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn apply_patch_precise_edit_and_path_jail() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::write(root.path().join("a.txt"), "hello world").unwrap();
+
+        let tools = WorkspaceFsTools::new(
+            vec![root.path().to_path_buf()],
+            HashSet::from(["apply_patch".into(), "search_files".into()]),
+        );
+
+        let ok = tools
+            .invoke(ToolCall {
+                name: "apply_patch".into(),
+                arguments: json!({
+                    "path": "a.txt",
+                    "old_string": "world",
+                    "new_string": "keryx"
+                }),
+            })
+            .await
+            .unwrap();
+        assert!(ok.content.contains("1 replacement"));
+        assert_eq!(
+            std::fs::read_to_string(root.path().join("a.txt")).unwrap(),
+            "hello keryx"
+        );
+
+        let escape = tools
+            .invoke(ToolCall {
+                name: "apply_patch".into(),
+                arguments: json!({
+                    "path": "../escape.txt",
+                    "old_string": "x",
+                    "new_string": "y"
+                }),
+            })
+            .await
+            .unwrap_err();
+        assert!(escape.to_string().contains("path jail"), "{escape}");
+    }
+
+    #[tokio::test]
+    async fn search_files_finds_content_and_stays_in_root() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(root.path().join("sub")).unwrap();
+        std::fs::write(root.path().join("sub/note.txt"), "unique-token-xyz").unwrap();
+        std::fs::write(root.path().join("other.txt"), "nothing").unwrap();
+
+        let tools = WorkspaceFsTools::new(
+            vec![root.path().to_path_buf()],
+            HashSet::from(["search_files".into()]),
+        );
+
+        let found = tools
+            .invoke(ToolCall {
+                name: "search_files".into(),
+                arguments: json!({ "query": "unique-token-xyz" }),
+            })
+            .await
+            .unwrap();
+        assert!(
+            found.content.contains("note.txt"),
+            "expected hit: {}",
+            found.content
+        );
+        assert!(found.summary.contains("hits="));
+
+        let outside = tools
+            .invoke(ToolCall {
+                name: "search_files".into(),
+                arguments: json!({ "query": "x", "path": ".." }),
+            })
+            .await
+            .unwrap_err();
+        assert!(outside.to_string().contains("path jail"), "{outside}");
+    }
+
+    #[tokio::test]
+    async fn search_files_survives_directory_symlink_loop() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::write(root.path().join("note.txt"), "loop-safe-content").unwrap();
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(root.path(), root.path().join("loop")).unwrap();
+        }
+        #[cfg(not(unix))]
+        {
+            // Non-unix: still exercise search without loop fixture.
+            let tools = WorkspaceFsTools::new(
+                vec![root.path().to_path_buf()],
+                HashSet::from(["search_files".into()]),
+            );
+            let found = tools
+                .invoke(ToolCall {
+                    name: "search_files".into(),
+                    arguments: json!({ "query": "loop-safe-content" }),
+                })
+                .await
+                .unwrap();
+            assert!(found.content.contains("note.txt"));
+            return;
+        }
+
+        let tools = WorkspaceFsTools::new(
+            vec![root.path().to_path_buf()],
+            HashSet::from(["search_files".into()]),
+        );
+        // Must terminate even when workspace contains `loop -> root`.
+        let found = tools
+            .invoke(ToolCall {
+                name: "search_files".into(),
+                arguments: json!({ "query": "loop-safe-content" }),
+            })
+            .await
+            .unwrap();
+        assert!(
+            found.content.contains("note.txt"),
+            "expected content hit without hang: {}",
+            found.content
+        );
+    }
+
+    #[tokio::test]
+    async fn symlink_escape_outside_root_denied_on_read() {
+        let root = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        std::fs::write(outside.path().join("secret.txt"), "top-secret").unwrap();
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(
+                outside.path().join("secret.txt"),
+                root.path().join("link.txt"),
+            )
+            .unwrap();
+        }
+        #[cfg(not(unix))]
+        {
+            return;
+        }
+
+        let tools = WorkspaceFsTools::new(
+            vec![root.path().to_path_buf()],
+            HashSet::from(["read_file".into(), "apply_patch".into()]),
+        );
+        let err = tools
+            .invoke(ToolCall {
+                name: "read_file".into(),
+                arguments: json!({ "path": "link.txt" }),
+            })
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("path jail"), "{err}");
     }
 }

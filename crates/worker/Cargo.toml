@@ -17,11 +17,12 @@ clap = { version = "4", features = ["derive"] }
 keryx-api = { path = "../api" }
 keryx-app = { path = "../app" }
 keryx-domain = { path = "../domain" }
+keryx-gateway = { path = "../gateway" }
 keryx-model = { path = "../model" }
 keryx-storage = { path = "../storage" }
 keryx-tools = { path = "../tools" }
 serde = { version = "1", features = ["derive"] }
-tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal", "sync", "net"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal", "sync", "net", "time"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 

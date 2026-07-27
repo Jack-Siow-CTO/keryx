@@ -1,4 +1,4 @@
-use crate::tools::ToolCall;
+use crate::tools::{ToolCall, ToolSpec};
 use async_trait::async_trait;
 use keryx_domain::TranscriptMessage;
 use thiserror::Error;
@@ -12,6 +12,8 @@ pub struct ModelRequest {
     pub provider: Option<String>,
     /// Optional per-run model id override (provider default when `None`).
     pub model: Option<String>,
+    /// Policy-filtered tool catalog for native function/tool calling (not prompt-stuffed lists).
+    pub tools: Vec<ToolSpec>,
 }
 
 impl ModelRequest {
@@ -22,7 +24,14 @@ impl ModelRequest {
             transcript: Vec::new(),
             provider: None,
             model: None,
+            tools: Vec::new(),
         }
+    }
+
+    #[must_use]
+    pub fn with_tools(mut self, tools: Vec<ToolSpec>) -> Self {
+        self.tools = tools;
+        self
     }
 }
 

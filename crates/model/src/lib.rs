@@ -16,12 +16,11 @@ pub use consumer::{
 pub use fake::FakeModelProvider;
 pub use multi::MultiModelProvider;
 pub use openai_compatible::{
-    grok_provider, openai_provider, GrokProvider, OpenAiCompatibleConfig, OpenAiCompatibleProvider,
+    from_openai_tool_name, grok_provider, openai_provider, parse_tool_calls, to_openai_tool_name,
+    tool_spec_to_openai, GrokProvider, OpenAiCompatibleConfig, OpenAiCompatibleProvider,
     OpenAiProvider,
 };
-pub use registry::{
-    register_from_env, AuthKind, ProviderDescriptor, RegisteredProviders,
-};
+pub use registry::{register_from_env, AuthKind, ProviderDescriptor, RegisteredProviders};
 
 /// Workspace smoke: model adapter is loadable.
 #[must_use]

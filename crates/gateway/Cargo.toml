@@ -1,0 +1,28 @@
+[package]
+name = "keryx-gateway"
+description = "Keryx Gateway adapters (Telegram, Discord) — control-plane clients only"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+async-trait = "0.1"
+keryx-app = { path = "../app" }
+keryx-domain = { path = "../domain" }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+tokio = { version = "1", features = ["macros", "rt", "sync", "time"] }
+tracing = "0.1"
+
+[dev-dependencies]
+keryx-model = { path = "../model" }
+keryx-storage = { path = "../storage" }
+serde_json = "1"
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+
+[lints]
+workspace = true

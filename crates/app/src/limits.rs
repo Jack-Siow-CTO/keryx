@@ -13,6 +13,18 @@ impl RunBudgets {
     pub fn unlimited() -> Self {
         Self::default()
     }
+
+    /// Cap child budgets so they cannot exceed parent authority.
+    #[must_use]
+    pub fn carve_for_child(&self, requested_tool_calls: Option<u64>) -> Self {
+        let parent_tools = self.max_tool_calls.unwrap_or(8);
+        let tools = requested_tool_calls.unwrap_or(4).min(parent_tools).max(1);
+        Self {
+            max_duration: self.max_duration.map(|d| d / 2),
+            max_tokens: self.max_tokens.map(|t| (t / 2).max(1)),
+            max_tool_calls: Some(tools),
+        }
+    }
 }
 
 /// Worker-wide concurrency and default Run budgets.

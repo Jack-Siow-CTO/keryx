@@ -1,20 +1,31 @@
+use crate::approval_broker::ApprovalBroker;
+use crate::context::{load_run_context, path_targets_protected, RunContextConfig};
 use crate::error::AppError;
 use crate::events::RunEventHub;
 use crate::limits::{RunBudgets, RunLimits};
 use crate::model::{ModelProvider, ModelRequest};
 use crate::registry::ActiveRunRegistry;
 use crate::store::SessionStore;
-use crate::tools::{summarize_tool_args, DenyAllTools, ToolRuntime};
+use crate::tools::{catalog_for_policy, summarize_tool_args, DenyAllTools, ToolError, ToolRuntime};
 use async_trait::async_trait;
 use keryx_domain::{
-    Principal, Run, RunEvent, RunEventKind, RunId, RunStatus, Session, SessionId, TranscriptMessage,
+    Approval, ApprovalId, ApprovalStatus, Policy, Principal, Run, RunEvent, RunEventKind, RunId,
+    RunOrigin, RunStatus, Schedule, ScheduleId, Session, SessionId, TranscriptMessage,
 };
+use std::collections::{BTreeSet, HashSet};
+use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::{broadcast, Mutex};
 use tokio::time::timeout;
 use tokio_util::sync::CancellationToken;
 
 const MAX_AGENT_STEPS: u32 = 8;
+
+/// Max wall time an agent loop waits for Principal Approval (fail closed on expiry).
+///
+/// Spec story 33: approval timeout → tool fails closed. Not configurable via RunBudgets
+/// yet; override later if needed. Documented for operators / tests.
+pub const APPROVAL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(300);
 
 /// Application service for Session/Run lifecycle and the agent loop.
 pub struct ControlPlane<S, M> {
@@ -24,6 +35,13 @@ pub struct ControlPlane<S, M> {
     events: Arc<RunEventHub>,
     limits: RunLimits,
     active: Arc<Mutex<ActiveRunRegistry>>,
+    /// Soul + Context file attachment config (distinct from Memory/Skill).
+    run_context: RunContextConfig,
+    approvals: Arc<ApprovalBroker>,
+    /// Exact tool names (typically `mcp.<server>.<tool>`) added to control_plane Policy only.
+    control_plane_extra_tools: BTreeSet<String>,
+    /// Config-declared high-blast tools (MCP or other) requiring Approval — no name heuristics.
+    high_blast_tools: HashSet<String>,
 }
 
 impl<S, M> ControlPlane<S, M>
@@ -48,6 +66,17 @@ where
         limits: RunLimits,
         tools: Arc<dyn ToolRuntime>,
     ) -> Self {
+        Self::with_tools_and_context(store, model, limits, tools, RunContextConfig::default())
+    }
+
+    #[must_use]
+    pub fn with_tools_and_context(
+        store: Arc<S>,
+        model: Arc<M>,
+        limits: RunLimits,
+        tools: Arc<dyn ToolRuntime>,
+        run_context: RunContextConfig,
+    ) -> Self {
         Self {
             store,
             model,
@@ -55,7 +84,30 @@ where
             events: Arc::new(RunEventHub::new()),
             limits,
             active: Arc::new(Mutex::new(ActiveRunRegistry::new())),
+            run_context,
+            approvals: Arc::new(ApprovalBroker::new()),
+            control_plane_extra_tools: BTreeSet::new(),
+            high_blast_tools: HashSet::new(),
         }
+    }
+
+    /// Exact tool names merged into control_plane Policy only (not gateway/schedule).
+    ///
+    /// Used for operator MCP allowlists: connect ≠ allow.
+    #[must_use]
+    pub fn with_control_plane_extra_tools(
+        mut self,
+        tools: impl IntoIterator<Item = String>,
+    ) -> Self {
+        self.control_plane_extra_tools.extend(tools);
+        self
+    }
+
+    /// Config-declared high-blast tool names (exact match → Approval path).
+    #[must_use]
+    pub fn with_high_blast_tools(mut self, tools: impl IntoIterator<Item = String>) -> Self {
+        self.high_blast_tools.extend(tools);
+        self
     }
 
     #[must_use]
@@ -68,11 +120,25 @@ where
 #[async_trait]
 pub trait ControlPlaneService: Send + Sync {
     async fn create_session(&self, principal: Principal) -> Result<Session, AppError>;
+    /// Start a Run with `origin=control_plane` (trusted control-plane API path).
     async fn start_run(
         &self,
         principal: Principal,
         session_id: SessionId,
         goal: String,
+        provider: Option<String>,
+        model: Option<String>,
+    ) -> Result<Run, AppError>;
+    /// Start a Run with an explicit Run origin (Gateways, Schedules, Seam 1 reduced-Policy tests).
+    ///
+    /// HTTP control plane always uses [`start_run`] (control_plane origin). This method is for
+    /// trusted internal adapters and tests that must exercise reduced-origin Policy templates.
+    async fn start_run_with_origin(
+        &self,
+        principal: Principal,
+        session_id: SessionId,
+        goal: String,
+        origin: RunOrigin,
         provider: Option<String>,
         model: Option<String>,
     ) -> Result<Run, AppError>;
@@ -84,6 +150,33 @@ pub trait ControlPlaneService: Send + Sync {
     ) -> Result<(Vec<RunEvent>, broadcast::Receiver<RunEvent>), AppError>;
     async fn count_sessions(&self) -> Result<usize, AppError>;
     async fn count_runs(&self) -> Result<usize, AppError>;
+    async fn list_approvals(&self, pending_only: bool) -> Result<Vec<Approval>, AppError>;
+    async fn get_approval(&self, id: ApprovalId) -> Result<Approval, AppError>;
+    async fn approve(&self, principal: Principal, id: ApprovalId) -> Result<Approval, AppError>;
+    async fn deny(&self, principal: Principal, id: ApprovalId) -> Result<Approval, AppError>;
+    /// Spawn a Child Run under an Active parent (tool / internal control-plane path).
+    async fn spawn_child_run(
+        &self,
+        parent_run_id: RunId,
+        goal: String,
+        max_tool_calls: Option<u64>,
+    ) -> Result<Run, AppError>;
+
+    async fn create_schedule(
+        &self,
+        principal: Principal,
+        goal: String,
+        interval_secs: u64,
+        next_fire_at: i64,
+        policy_tools: Option<Vec<String>>,
+    ) -> Result<Schedule, AppError>;
+    async fn list_schedules(&self) -> Result<Vec<Schedule>, AppError>;
+    async fn get_schedule(&self, id: ScheduleId) -> Result<Schedule, AppError>;
+    async fn pause_schedule(&self, id: ScheduleId) -> Result<Schedule, AppError>;
+    async fn resume_schedule(&self, id: ScheduleId, now: i64) -> Result<Schedule, AppError>;
+    async fn delete_schedule(&self, id: ScheduleId) -> Result<Schedule, AppError>;
+    /// Fire due Schedules at `now` (deterministic clock for tests). Returns started Runs.
+    async fn tick_schedules(&self, now: i64) -> Result<Vec<Run>, AppError>;
 }
 
 #[async_trait]
@@ -109,6 +202,26 @@ where
         provider: Option<String>,
         model_id: Option<String>,
     ) -> Result<Run, AppError> {
+        self.start_run_with_origin(
+            principal,
+            session_id,
+            goal,
+            RunOrigin::ControlPlane,
+            provider,
+            model_id,
+        )
+        .await
+    }
+
+    async fn start_run_with_origin(
+        &self,
+        principal: Principal,
+        session_id: SessionId,
+        goal: String,
+        origin: RunOrigin,
+        provider: Option<String>,
+        model_id: Option<String>,
+    ) -> Result<Run, AppError> {
         let session = self
             .store
             .get_session(session_id)
@@ -116,7 +229,7 @@ where
             .map_err(AppError::Store)?
             .ok_or(AppError::SessionNotFound)?;
 
-        let (run, cancel) = {
+        let (run, cancel, principal_id) = {
             let mut active = self.active.lock().await;
             if let Some(existing) = active.active_for_session(session.id) {
                 return Err(AppError::ActiveRunExists {
@@ -130,13 +243,15 @@ where
                 });
             }
 
-            let run = Run::start(session.id, principal.id, goal.clone());
+            let principal_id = principal.id.clone();
+            let run =
+                Run::start_with_origin(session.id, principal_id.clone(), goal.clone(), origin);
             self.store
                 .create_run(run.clone())
                 .await
                 .map_err(AppError::Store)?;
             let cancel = active.register(session.id, run.id);
-            (run, cancel)
+            (run, cancel, principal_id)
         };
 
         let store = Arc::clone(&self.store);
@@ -144,9 +259,14 @@ where
         let tools = Arc::clone(&self.tools);
         let events = Arc::clone(&self.events);
         let active = Arc::clone(&self.active);
+        let approvals = Arc::clone(&self.approvals);
         let budgets = self.limits.default_budgets.clone();
+        let run_context = self.run_context.clone();
+        let control_plane_extra_tools = self.control_plane_extra_tools.clone();
+        let high_blast_tools = self.high_blast_tools.clone();
         let run_id = run.id;
         let run_session = run.session_id;
+        let run_origin = run.origin.clone();
 
         tokio::spawn(async move {
             let _ = execute_agent_loop(
@@ -155,12 +275,19 @@ where
                 tools,
                 events,
                 active,
+                approvals,
                 run_id,
                 run_session,
+                principal_id,
                 goal,
+                run_origin,
                 provider,
                 model_id,
                 budgets,
+                run_context,
+                control_plane_extra_tools,
+                high_blast_tools,
+                None, // root: derive Policy from origin + extras
                 cancel,
             )
             .await;
@@ -183,9 +310,8 @@ where
             return Err(AppError::RunNotActive);
         }
 
-        if let Some(token) = self.active.lock().await.cancel_token(run_id) {
-            token.cancel();
-        }
+        // Cancel root and all Child Runs in the tree.
+        self.active.lock().await.cancel_tree(run_id);
 
         for _ in 0..100 {
             let run = self.get_run(run_id).await?;
@@ -203,9 +329,136 @@ where
                 .await
                 .map_err(AppError::Store)?;
             let _ = self.events.publish(run_id, RunEventKind::RunCancelled);
-            self.active.lock().await.clear(run.session_id, run_id);
+            if run.is_root() {
+                self.active.lock().await.clear(run.session_id, run_id);
+            } else {
+                self.active.lock().await.clear_child(run_id);
+            }
         }
         self.get_run(run_id).await
+    }
+
+    async fn spawn_child_run(
+        &self,
+        parent_run_id: RunId,
+        goal: String,
+        max_tool_calls: Option<u64>,
+    ) -> Result<Run, AppError> {
+        self.spawn_child_run_inner(parent_run_id, goal, max_tool_calls)
+            .await
+    }
+
+    async fn create_schedule(
+        &self,
+        principal: Principal,
+        goal: String,
+        interval_secs: u64,
+        next_fire_at: i64,
+        policy_tools: Option<Vec<String>>,
+    ) -> Result<Schedule, AppError> {
+        if goal.trim().is_empty() {
+            return Err(AppError::Store("schedule goal must not be empty".into()));
+        }
+        // Frozen Policy snapshot: default to reduced (schedule origin) allowlist.
+        let tools = policy_tools
+            .unwrap_or_else(|| Policy::reduced().allowed_tools.iter().cloned().collect());
+        let schedule = Schedule::new(principal.id, goal, interval_secs, next_fire_at, tools);
+        self.store
+            .create_schedule(schedule.clone())
+            .await
+            .map_err(AppError::Store)?;
+        Ok(schedule)
+    }
+
+    async fn list_schedules(&self) -> Result<Vec<Schedule>, AppError> {
+        self.store.list_schedules().await.map_err(AppError::Store)
+    }
+
+    async fn get_schedule(&self, id: ScheduleId) -> Result<Schedule, AppError> {
+        self.store
+            .get_schedule(id)
+            .await
+            .map_err(AppError::Store)?
+            .ok_or(AppError::ScheduleNotFound)
+    }
+
+    async fn pause_schedule(&self, id: ScheduleId) -> Result<Schedule, AppError> {
+        let mut s = self.get_schedule(id).await?;
+        s.pause();
+        self.store
+            .update_schedule(s.clone())
+            .await
+            .map_err(AppError::Store)?;
+        Ok(s)
+    }
+
+    async fn resume_schedule(&self, id: ScheduleId, now: i64) -> Result<Schedule, AppError> {
+        let mut s = self.get_schedule(id).await?;
+        s.resume(now);
+        self.store
+            .update_schedule(s.clone())
+            .await
+            .map_err(AppError::Store)?;
+        Ok(s)
+    }
+
+    async fn delete_schedule(&self, id: ScheduleId) -> Result<Schedule, AppError> {
+        let mut s = self.get_schedule(id).await?;
+        s.mark_deleted();
+        self.store
+            .update_schedule(s.clone())
+            .await
+            .map_err(AppError::Store)?;
+        Ok(s)
+    }
+
+    async fn tick_schedules(&self, now: i64) -> Result<Vec<Run>, AppError> {
+        let schedules = self.list_schedules().await?;
+        let mut started = Vec::new();
+        for mut schedule in schedules {
+            if !schedule.is_due(now) {
+                continue;
+            }
+            // Double-fire guard: if we already fired at this exact second, skip.
+            if schedule.last_fired_at == Some(now) {
+                continue;
+            }
+            let principal = Principal {
+                id: schedule.principal_id.clone(),
+            };
+            let session_id = if let Some(sid) = schedule.session_id {
+                sid
+            } else {
+                let session = self.create_session(principal.clone()).await?;
+                schedule.session_id = Some(session.id);
+                session.id
+            };
+            // Start Run with origin=schedule (reduced Policy via origin).
+            match self
+                .start_run_with_origin(
+                    principal,
+                    session_id,
+                    schedule.goal.clone(),
+                    RunOrigin::Schedule,
+                    None,
+                    None,
+                )
+                .await
+            {
+                Ok(run) => {
+                    schedule.record_fire(now);
+                    let _ = self.store.update_schedule(schedule).await;
+                    started.push(run);
+                }
+                Err(AppError::ActiveRunExists { .. }) | Err(AppError::GlobalCapExceeded { .. }) => {
+                    // Missed fire: leave next_fire_at so a later tick retries (no double-fire).
+                    // Documented: overload skips this tick without advancing schedule.
+                    continue;
+                }
+                Err(e) => return Err(e),
+            }
+        }
+        Ok(started)
     }
 
     async fn subscribe_run_events(
@@ -222,6 +475,194 @@ where
 
     async fn count_runs(&self) -> Result<usize, AppError> {
         self.store.count_runs().await.map_err(AppError::Store)
+    }
+
+    async fn list_approvals(&self, pending_only: bool) -> Result<Vec<Approval>, AppError> {
+        self.store
+            .list_approvals(pending_only)
+            .await
+            .map_err(AppError::Store)
+    }
+
+    async fn get_approval(&self, id: ApprovalId) -> Result<Approval, AppError> {
+        self.store
+            .get_approval(id)
+            .await
+            .map_err(AppError::Store)?
+            .ok_or(AppError::ApprovalNotFound)
+    }
+
+    async fn approve(&self, principal: Principal, id: ApprovalId) -> Result<Approval, AppError> {
+        self.decide_approval(principal, id, true).await
+    }
+
+    async fn deny(&self, principal: Principal, id: ApprovalId) -> Result<Approval, AppError> {
+        self.decide_approval(principal, id, false).await
+    }
+}
+
+impl<S, M> ControlPlane<S, M>
+where
+    S: SessionStore + 'static,
+    M: ModelProvider + 'static,
+{
+    async fn spawn_child_run_inner(
+        &self,
+        parent_run_id: RunId,
+        goal: String,
+        max_tool_calls: Option<u64>,
+    ) -> Result<Run, AppError> {
+        if goal.trim().is_empty() {
+            return Err(AppError::Store("child goal must not be empty".into()));
+        }
+        let parent = self.get_run(parent_run_id).await?;
+        if parent.status != RunStatus::Active {
+            return Err(AppError::RunNotActive);
+        }
+        if !parent.is_root() {
+            // Vertical slice: only root may spawn (avoids deep trees for now).
+            return Err(AppError::Store(
+                "only root Runs may spawn Child Runs in this version".into(),
+            ));
+        }
+
+        // Freeze parent Policy snapshot at spawn so later Worker config changes cannot
+        // expand child authority mid-process. Children inherit exact parent allowlist;
+        // if spawn API later accepts a tighter tool set, intersect via subset_of(parent).
+        let parent_policy = policy_for_run(&parent.origin, &self.control_plane_extra_tools);
+        let child_policy = parent_policy.clone();
+        // Budgets carved from / capped by parent defaults.
+        let child_budgets = self.limits.default_budgets.carve_for_child(max_tool_calls);
+
+        let child = Run::start_child(
+            parent.session_id,
+            parent.principal_id.clone(),
+            parent.id,
+            goal.clone(),
+            parent.origin.clone(),
+        );
+        self.store
+            .create_run(child.clone())
+            .await
+            .map_err(AppError::Store)?;
+
+        let cancel = {
+            let mut active = self.active.lock().await;
+            active.register_child(parent.id, child.id)
+        };
+
+        let _ = self.events.publish(
+            parent.id,
+            RunEventKind::ChildRunStarted {
+                child_run_id: child.id.to_string(),
+                goal: goal.clone(),
+            },
+        );
+
+        let store = Arc::clone(&self.store);
+        let model = Arc::clone(&self.model);
+        let tools = Arc::clone(&self.tools);
+        let events = Arc::clone(&self.events);
+        let active = Arc::clone(&self.active);
+        let approvals = Arc::clone(&self.approvals);
+        let control_plane_extra_tools = self.control_plane_extra_tools.clone();
+        let high_blast_tools = self.high_blast_tools.clone();
+        // Child: isolated transcript slice — no Soul re-attach (parent already has identity).
+        let run_context = RunContextConfig::default();
+        let child_id = child.id;
+        let session_id = child.session_id;
+        let principal_id = child.principal_id.clone();
+        let origin = child.origin.clone();
+        let parent_id = parent.id;
+
+        tokio::spawn(async move {
+            let result = execute_agent_loop(
+                store.clone(),
+                model,
+                tools,
+                events.clone(),
+                active.clone(),
+                approvals,
+                child_id,
+                session_id,
+                principal_id,
+                goal,
+                origin,
+                None,
+                None,
+                child_budgets,
+                run_context,
+                control_plane_extra_tools,
+                high_blast_tools,
+                Some(child_policy),
+                cancel,
+            )
+            .await;
+
+            // Mark child clear in registry; notify parent.
+            let status = store
+                .get_run(child_id)
+                .await
+                .ok()
+                .flatten()
+                .map(|r| match r.status {
+                    RunStatus::Active => "active",
+                    RunStatus::Completed => "completed",
+                    RunStatus::Failed => "failed",
+                    RunStatus::Cancelled => "cancelled",
+                    RunStatus::Interrupted => "interrupted",
+                })
+                .unwrap_or("unknown")
+                .to_string();
+            let _ = events.publish(
+                parent_id,
+                RunEventKind::ChildRunFinished {
+                    child_run_id: child_id.to_string(),
+                    status,
+                },
+            );
+            active.lock().await.clear_child(child_id);
+            let _ = result;
+        });
+
+        Ok(child)
+    }
+
+    async fn decide_approval(
+        &self,
+        principal: Principal,
+        id: ApprovalId,
+        approve: bool,
+    ) -> Result<Approval, AppError> {
+        let mut approval = self.get_approval(id).await?;
+        if approval.status != ApprovalStatus::Pending {
+            return Err(AppError::ApprovalNotPending);
+        }
+        if approve {
+            approval.approve(principal.id.clone());
+        } else {
+            approval.deny(principal.id.clone());
+        }
+        // CAS-style: only transition from pending (concurrent decide → conflict).
+        let updated = self
+            .store
+            .update_approval_if_pending(approval.clone())
+            .await
+            .map_err(AppError::Store)?;
+        if !updated {
+            return Err(AppError::ApprovalNotPending);
+        }
+        self.approvals.resolve(id, approval.status);
+        let decision = if approve { "approved" } else { "denied" };
+        let _ = self.events.publish(
+            approval.run_id,
+            RunEventKind::ApprovalResolved {
+                approval_id: approval.id.to_string(),
+                decision: decision.into(),
+                principal_id: principal.id.to_string(),
+            },
+        );
+        Ok(approval)
     }
 }
 
@@ -252,25 +693,51 @@ async fn finalize_run<S: SessionStore>(
     Ok(())
 }
 
-#[allow(clippy::too_many_arguments)] // agent loop needs store, model, tools, events, registry, ids, budgets, cancel
+/// Build Policy for a Run: origin template + control_plane-only extras (MCP allowlist).
+fn policy_for_run(origin: &RunOrigin, control_plane_extra: &BTreeSet<String>) -> Policy {
+    let base = Policy::for_origin(origin);
+    match origin {
+        RunOrigin::ControlPlane if !control_plane_extra.is_empty() => {
+            base.with_extra_tools(control_plane_extra.iter().cloned())
+        }
+        // Reduced origins never receive MCP extras by default (connect ≠ allow).
+        _ => base,
+    }
+}
+
+#[allow(clippy::too_many_arguments)] // agent loop orchestration bundle
 async fn execute_agent_loop<S, M>(
     store: Arc<S>,
     model: Arc<M>,
     tools: Arc<dyn ToolRuntime>,
     events: Arc<RunEventHub>,
     active: Arc<Mutex<ActiveRunRegistry>>,
+    approvals: Arc<ApprovalBroker>,
     run_id: RunId,
     session_id: SessionId,
+    principal_id: keryx_domain::PrincipalId,
     goal: String,
+    origin: RunOrigin,
     provider: Option<String>,
     model_id: Option<String>,
     budgets: RunBudgets,
+    run_context: RunContextConfig,
+    control_plane_extra_tools: BTreeSet<String>,
+    high_blast_tools: HashSet<String>,
+    // Frozen Policy snapshot (Child Runs). When set, used instead of re-deriving
+    // from origin + live Worker extras so children cannot gain tools mid-process.
+    policy_override: Option<Policy>,
     cancel: CancellationToken,
 ) -> Result<(), AppError>
 where
     S: SessionStore,
     M: ModelProvider,
 {
+    // Origin-selected Policy template (fail closed for tools not on the allowlist),
+    // or a frozen parent snapshot for Child Runs.
+    let policy =
+        policy_override.unwrap_or_else(|| policy_for_run(&origin, &control_plane_extra_tools));
+
     let publish = |kind: RunEventKind| -> Result<(), AppError> {
         events
             .publish(run_id, kind)
@@ -279,6 +746,17 @@ where
     };
 
     publish(RunEventKind::RunStarted)?;
+
+    // Attach Soul + workspace Context files once per Run (system Transcript).
+    // Soft-missing by default; distinct from Memory/Skill.
+    let loaded = load_run_context(&run_context);
+    let protected_paths = loaded.protected_paths.clone();
+    for msg in loaded.messages {
+        store
+            .append_transcript(session_id, msg)
+            .await
+            .map_err(AppError::Store)?;
+    }
 
     // User goal is part of durable Transcript once the Run completes successfully;
     // append up front so tool steps and subsequent model calls see it.
@@ -311,11 +789,14 @@ where
             .get_transcript(session_id)
             .await
             .map_err(AppError::Store)?;
+        // Catalog = registered ∩ Policy (model never sees tools it cannot invoke).
+        let tools_for_model = catalog_for_policy(&tools.catalog(), |name| policy.allows_tool(name));
         let model_future = model.complete(ModelRequest {
             goal: goal.clone(),
             transcript: transcript.messages,
             provider: provider.clone(),
             model: model_id.clone(),
+            tools: tools_for_model,
         });
 
         let model_result = if let Some(max_duration) = budgets.max_duration {
@@ -514,7 +995,80 @@ where
                 name: format!("{} ({args_summary})", call.name),
             })?;
 
-            match tools.invoke(call.clone()).await {
+            // Fail closed: origin Policy deny before adapter execution.
+            let mut call = call;
+            // Reduced origin: never local exec (Docker default / fail closed).
+            // Enforced here so adapter wiring cannot bypass Run origin.
+            if matches!(call.name.as_str(), "run_terminal" | "shell_exec")
+                && origin.is_reduced_trust()
+            {
+                let backend = call
+                    .arguments
+                    .get("backend")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("docker");
+                if backend == "local" {
+                    let summary = "local exec denied for reduced Run origin (use docker backend)";
+                    publish(RunEventKind::ToolFinished {
+                        name: format!("{}: error={summary}", call.name),
+                    })?;
+                    store
+                        .append_transcript(
+                            session_id,
+                            TranscriptMessage {
+                                role: keryx_domain::MessageRole::Tool,
+                                content: format!("{}: error={summary}", call.name),
+                            },
+                        )
+                        .await
+                        .map_err(AppError::Store)?;
+                    continue;
+                }
+                // Force docker when backend omitted on reduced origin.
+                if call.arguments.get("backend").is_none() {
+                    if let Some(obj) = call.arguments.as_object_mut() {
+                        obj.insert("backend".into(), serde_json::json!("docker"));
+                    }
+                }
+            }
+
+            let needs_approval = is_high_blast_soul_context_edit(
+                &call,
+                &protected_paths,
+                &run_context.workspace_roots,
+            ) || is_high_blast_local_terminal(&call, &origin)
+                || (call.name == "skill_manage" && !origin.is_reduced_trust())
+                || high_blast_tools.contains(&call.name);
+
+            let tool_outcome = if !policy.allows_tool(&call.name) {
+                Err(ToolError::Denied(format!(
+                    "tool '{}' denied by Policy for origin {}",
+                    call.name,
+                    origin.as_str()
+                )))
+            } else if needs_approval {
+                match request_and_wait_approval(
+                    store.as_ref(),
+                    events.as_ref(),
+                    approvals.as_ref(),
+                    run_id,
+                    principal_id.clone(),
+                    &call,
+                    &cancel,
+                )
+                .await
+                {
+                    Ok(true) => tools.invoke(call.clone()).await,
+                    Ok(false) => Err(ToolError::Denied(
+                        "high-blast: Approval denied (fail closed)".into(),
+                    )),
+                    Err(e) => Err(e),
+                }
+            } else {
+                tools.invoke(call.clone()).await
+            };
+
+            match tool_outcome {
                 Ok(result) => {
                     publish(RunEventKind::ToolFinished {
                         name: format!("{}: {}", call.name, result.summary),
@@ -565,4 +1119,134 @@ where
         RunEventKind::RunFailed { reason },
     )
     .await
+}
+
+/// Local terminal exec is high-blast for control_plane origin (Approval required).
+fn is_high_blast_local_terminal(call: &crate::tools::ToolCall, origin: &RunOrigin) -> bool {
+    if !matches!(call.name.as_str(), "run_terminal" | "shell_exec") {
+        return false;
+    }
+    if origin.is_reduced_trust() {
+        return false; // reduced uses docker path; local is denied in adapter
+    }
+    let backend = call
+        .arguments
+        .get("backend")
+        .and_then(|v| v.as_str())
+        .unwrap_or("local");
+    backend == "local"
+}
+
+/// True when a write-class tool targets a loaded Soul or Context file path.
+fn is_high_blast_soul_context_edit(
+    call: &crate::tools::ToolCall,
+    protected: &[PathBuf],
+    workspace_roots: &[PathBuf],
+) -> bool {
+    if protected.is_empty() {
+        return false;
+    }
+    if !matches!(call.name.as_str(), "write_file" | "apply_patch") {
+        return false;
+    }
+    let Some(path) = call.arguments.get("path").and_then(|v| v.as_str()) else {
+        return false;
+    };
+    path_targets_protected(path, workspace_roots, protected)
+}
+
+/// Create a pending Approval, emit SSE, wait for Principal decision (or cancel/timeout).
+///
+/// Returns `Ok(true)` if approved, `Ok(false)` if denied, `Err` on cancel/timeout/store failure.
+///
+/// Waiter is registered **before** the durable row is inserted so a concurrent
+/// decide after list cannot lose the oneshot (register-before-visible).
+///
+/// On [`APPROVAL_TIMEOUT`] expiry: CAS-deny the row, resolve the broker (no waiter leak),
+/// fail the tool closed (spec story 33).
+async fn request_and_wait_approval<S: SessionStore>(
+    store: &S,
+    events: &RunEventHub,
+    broker: &ApprovalBroker,
+    run_id: RunId,
+    principal_id: keryx_domain::PrincipalId,
+    call: &crate::tools::ToolCall,
+    cancel: &CancellationToken,
+) -> Result<bool, ToolError> {
+    let summary = summarize_tool_args(&call.arguments);
+    let approval = Approval::pending(run_id, principal_id, call.name.clone(), summary.clone());
+    let approval_id = approval.id;
+
+    // Register waiter first (before durable row is listable).
+    let rx = broker.register(approval_id);
+
+    store
+        .create_approval(approval)
+        .await
+        .map_err(|e| ToolError::Failed(format!("approval store: {e}")))?;
+
+    // If a decide raced in (should be rare with register-first), honor store status.
+    if let Ok(Some(current)) = store.get_approval(approval_id).await {
+        match current.status {
+            ApprovalStatus::Approved => return Ok(true),
+            ApprovalStatus::Denied => return Ok(false),
+            ApprovalStatus::Pending => {}
+        }
+    }
+
+    events
+        .publish(
+            run_id,
+            RunEventKind::ApprovalWaiting {
+                approval_id: approval_id.to_string(),
+                action: call.name.clone(),
+                summary,
+            },
+        )
+        .map_err(ToolError::Failed)?;
+
+    async fn fail_closed_pending<S: SessionStore>(
+        store: &S,
+        broker: &ApprovalBroker,
+        approval_id: ApprovalId,
+        system_actor: &str,
+    ) {
+        if let Ok(Some(mut a)) = store.get_approval(approval_id).await {
+            if a.status == ApprovalStatus::Pending {
+                a.deny(keryx_domain::PrincipalId::new(system_actor));
+                let _ = store.update_approval_if_pending(a).await;
+                broker.resolve(approval_id, ApprovalStatus::Denied);
+            }
+        }
+    }
+
+    tokio::select! {
+        () = cancel.cancelled() => {
+            fail_closed_pending(store, broker, approval_id, "system:cancel").await;
+            Err(ToolError::Failed("approval wait cancelled".into()))
+        }
+        () = tokio::time::sleep(APPROVAL_TIMEOUT) => {
+            fail_closed_pending(store, broker, approval_id, "system:timeout").await;
+            Err(ToolError::Failed(format!(
+                "approval timed out after {}s (fail closed)",
+                APPROVAL_TIMEOUT.as_secs()
+            )))
+        }
+        decision = rx => {
+            match decision {
+                Ok(ApprovalStatus::Approved) => Ok(true),
+                Ok(ApprovalStatus::Denied) | Ok(ApprovalStatus::Pending) => Ok(false),
+                Err(_) => {
+                    // Channel closed: re-read store for late decision.
+                    match store.get_approval(approval_id).await {
+                        Ok(Some(a)) if a.status == ApprovalStatus::Approved => Ok(true),
+                        Ok(Some(_)) => Ok(false),
+                        _ => Err(ToolError::Failed(
+                            "approval waiter dropped without decision".into(),
+                        )),
+                    }
+                }
+            }
+        }
+    }
 }

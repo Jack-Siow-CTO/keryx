@@ -62,6 +62,7 @@ impl ChatGptWebProvider {
         let mut messages = Vec::new();
         for msg in &request.transcript {
             let role = match msg.role {
+                MessageRole::System => "system",
                 MessageRole::User | MessageRole::Tool => "user",
                 MessageRole::Assistant => "assistant",
             };
