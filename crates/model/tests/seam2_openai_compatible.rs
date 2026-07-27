@@ -291,12 +291,10 @@ async fn openai_compatible_sends_tools_catalog_when_present() {
         "required": ["q"]
     });
     provider
-        .complete(
-            ModelRequest::new("use tools").with_tools(vec![
-                ToolSpec::new("mcp.mail.search", "search mail", schema.clone()),
-                ToolSpec::empty_params("read_file", "read workspace file"),
-            ]),
-        )
+        .complete(ModelRequest::new("use tools").with_tools(vec![
+            ToolSpec::new("mcp.mail.search", "search mail", schema.clone()),
+            ToolSpec::empty_params("read_file", "read workspace file"),
+        ]))
         .await
         .unwrap();
 
@@ -308,10 +306,7 @@ async fn openai_compatible_sends_tools_catalog_when_present() {
     // Wire-safe: dots replaced with `__` (OpenAI function name charset).
     assert_eq!(tools[0]["function"]["name"], "mcp__mail__search");
     assert!(
-        !tools[0]["function"]["name"]
-            .as_str()
-            .unwrap()
-            .contains('.'),
+        !tools[0]["function"]["name"].as_str().unwrap().contains('.'),
         "wire tool name must not contain dots"
     );
     assert_eq!(tools[0]["function"]["description"], "search mail");
@@ -377,10 +372,8 @@ async fn openai_compatible_assembles_streamed_tool_calls() {
 
     let response = provider
         .complete(
-            ModelRequest::new("echo").with_tools(vec![ToolSpec::empty_params(
-                "mcp.demo.echo",
-                "echo",
-            )]),
+            ModelRequest::new("echo")
+                .with_tools(vec![ToolSpec::empty_params("mcp.demo.echo", "echo")]),
         )
         .await
         .unwrap();

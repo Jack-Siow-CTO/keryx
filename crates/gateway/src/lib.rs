@@ -4,9 +4,7 @@
 
 mod telegram_live;
 
-pub use telegram_live::{
-    run_telegram_long_poll, ChatAllowlist, ChatSessionMap, TelegramBotApi,
-};
+pub use telegram_live::{run_telegram_long_poll, ChatAllowlist, ChatSessionMap, TelegramBotApi};
 
 use async_trait::async_trait;
 use keryx_app::{AppError, ControlPlaneService};
@@ -100,10 +98,7 @@ where
             if let Some(id) = map.get(&msg.chat_id) {
                 *id
             } else {
-                let session: Session = self
-                    .control
-                    .create_session(self.principal.clone())
-                    .await?;
+                let session: Session = self.control.create_session(self.principal.clone()).await?;
                 map.insert(msg.chat_id.clone(), session.id);
                 session.id
             }
@@ -255,7 +250,10 @@ mod tests {
             }
         });
         let inbound = telegram::parse_update(&update).unwrap();
-        let run = gw.handle_inbound(inbound, "secret-bot-token").await.unwrap();
+        let run = gw
+            .handle_inbound(inbound, "secret-bot-token")
+            .await
+            .unwrap();
         assert_eq!(run.origin.as_str(), "gateway:telegram");
         assert!(run.origin.is_reduced_trust());
 
@@ -320,10 +318,7 @@ mod tests {
             }
         });
         let inbound = discord::parse_message_create(&event).unwrap();
-        let run = gw
-            .handle_inbound(inbound, "discord-token")
-            .await
-            .unwrap();
+        let run = gw.handle_inbound(inbound, "discord-token").await.unwrap();
         assert_eq!(run.origin.as_str(), "gateway:discord");
     }
 }

@@ -6,11 +6,14 @@ use thiserror::Error;
 /// Channel that initiated a Run (control plane, Gateway platform, or Schedule).
 ///
 /// Wire form: `control_plane`, `schedule`, or `gateway:{platform}` (e.g. `gateway:telegram`).
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Default)]
 pub enum RunOrigin {
+    #[default]
     ControlPlane,
     Schedule,
-    Gateway { platform: String },
+    Gateway {
+        platform: String,
+    },
 }
 
 impl RunOrigin {
@@ -50,12 +53,6 @@ impl RunOrigin {
     #[must_use]
     pub fn is_reduced_trust(&self) -> bool {
         !matches!(self, Self::ControlPlane)
-    }
-}
-
-impl Default for RunOrigin {
-    fn default() -> Self {
-        Self::ControlPlane
     }
 }
 

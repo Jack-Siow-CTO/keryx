@@ -65,8 +65,8 @@ impl ChatGptCodexProvider {
             .map_err(ModelError::new)?
             .or_else(|| extract_account_id_from_jwt(&token));
 
-        let mut extra = super::auth::read_headers_file("CHATGPT_WEB_HEADERS_FILE")
-            .map_err(ModelError::new)?;
+        let mut extra =
+            super::auth::read_headers_file("CHATGPT_WEB_HEADERS_FILE").map_err(ModelError::new)?;
         if let Some(acct) = account_id {
             extra
                 .entry("chatgpt-account-id".into())

@@ -6,9 +6,7 @@ use crate::limits::{RunBudgets, RunLimits};
 use crate::model::{ModelProvider, ModelRequest};
 use crate::registry::ActiveRunRegistry;
 use crate::store::SessionStore;
-use crate::tools::{
-    catalog_for_policy, summarize_tool_args, DenyAllTools, ToolError, ToolRuntime,
-};
+use crate::tools::{catalog_for_policy, summarize_tool_args, DenyAllTools, ToolError, ToolRuntime};
 use async_trait::async_trait;
 use keryx_domain::{
     Approval, ApprovalId, ApprovalStatus, Policy, Principal, Run, RunEvent, RunEventKind, RunId,
@@ -362,20 +360,9 @@ where
             return Err(AppError::Store("schedule goal must not be empty".into()));
         }
         // Frozen Policy snapshot: default to reduced (schedule origin) allowlist.
-        let tools = policy_tools.unwrap_or_else(|| {
-            Policy::reduced()
-                .allowed_tools
-                .iter()
-                .cloned()
-                .collect()
-        });
-        let schedule = Schedule::new(
-            principal.id,
-            goal,
-            interval_secs,
-            next_fire_at,
-            tools,
-        );
+        let tools = policy_tools
+            .unwrap_or_else(|| Policy::reduced().allowed_tools.iter().cloned().collect());
+        let schedule = Schedule::new(principal.id, goal, interval_secs, next_fire_at, tools);
         self.store
             .create_schedule(schedule.clone())
             .await
@@ -542,16 +529,10 @@ where
         // Freeze parent Policy snapshot at spawn so later Worker config changes cannot
         // expand child authority mid-process. Children inherit exact parent allowlist;
         // if spawn API later accepts a tighter tool set, intersect via subset_of(parent).
-        let parent_policy = policy_for_run(
-            &parent.origin,
-            &self.control_plane_extra_tools,
-        );
+        let parent_policy = policy_for_run(&parent.origin, &self.control_plane_extra_tools);
         let child_policy = parent_policy.clone();
         // Budgets carved from / capped by parent defaults.
-        let child_budgets = self
-            .limits
-            .default_budgets
-            .carve_for_child(max_tool_calls);
+        let child_budgets = self.limits.default_budgets.carve_for_child(max_tool_calls);
 
         let child = Run::start_child(
             parent.session_id,
@@ -754,7 +735,8 @@ where
 {
     // Origin-selected Policy template (fail closed for tools not on the allowlist),
     // or a frozen parent snapshot for Child Runs.
-    let policy = policy_override.unwrap_or_else(|| policy_for_run(&origin, &control_plane_extra_tools));
+    let policy =
+        policy_override.unwrap_or_else(|| policy_for_run(&origin, &control_plane_extra_tools));
 
     let publish = |kind: RunEventKind| -> Result<(), AppError> {
         events
@@ -808,8 +790,7 @@ where
             .await
             .map_err(AppError::Store)?;
         // Catalog = registered ∩ Policy (model never sees tools it cannot invoke).
-        let tools_for_model =
-            catalog_for_policy(&tools.catalog(), |name| policy.allows_tool(name));
+        let tools_for_model = catalog_for_policy(&tools.catalog(), |name| policy.allows_tool(name));
         let model_future = model.complete(ModelRequest {
             goal: goal.clone(),
             transcript: transcript.messages,
@@ -1027,8 +1008,7 @@ where
                     .and_then(|v| v.as_str())
                     .unwrap_or("docker");
                 if backend == "local" {
-                    let summary =
-                        "local exec denied for reduced Run origin (use docker backend)";
+                    let summary = "local exec denied for reduced Run origin (use docker backend)";
                     publish(RunEventKind::ToolFinished {
                         name: format!("{}: error={summary}", call.name),
                     })?;
@@ -1223,7 +1203,7 @@ async fn request_and_wait_approval<S: SessionStore>(
                 summary,
             },
         )
-        .map_err(|e| ToolError::Failed(e))?;
+        .map_err(ToolError::Failed)?;
 
     async fn fail_closed_pending<S: SessionStore>(
         store: &S,

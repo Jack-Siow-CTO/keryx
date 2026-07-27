@@ -21,7 +21,14 @@ const PRINCIPAL: &str = "op";
 
 async fn wait_done(store: &InMemorySessionStore, id: keryx_domain::RunId) {
     for _ in 0..50 {
-        if store.get_run(id).await.unwrap().unwrap().status.is_terminal() {
+        if store
+            .get_run(id)
+            .await
+            .unwrap()
+            .unwrap()
+            .status
+            .is_terminal()
+        {
             return;
         }
         tokio::time::sleep(Duration::from_millis(10)).await;
@@ -31,7 +38,7 @@ async fn wait_done(store: &InMemorySessionStore, id: keryx_domain::RunId) {
 #[tokio::test]
 async fn browser_isolated_navigate_and_snapshot() {
     let state = Arc::new(IsolatedBrowserState::new(HashSet::from([
-        "example.com".into(),
+        "example.com".into()
     ])));
     let tools = Arc::new(BrowserTools::new(
         HashSet::from([
@@ -134,7 +141,9 @@ async fn computer_use_isolated_and_reduced_denied() {
     wait_done(&store, run.id).await;
     let t = store.get_transcript(s.id).await.unwrap();
     assert!(
-        t.messages.iter().any(|m| m.content.contains("denied") || m.content.contains("reduced")),
+        t.messages
+            .iter()
+            .any(|m| m.content.contains("denied") || m.content.contains("reduced")),
         "{:?}",
         t.messages
     );
@@ -241,14 +250,20 @@ async fn media_vision_tts_image_gen_gating() {
     wait_done(&store, run.id).await;
     let t = store.get_transcript(s.id).await.unwrap();
     assert!(t.messages.iter().any(|m| m.content.contains("vision")));
-    assert!(t.messages.iter().any(|m| m.content.contains("tts") || m.content.contains("voice")));
+    assert!(t
+        .messages
+        .iter()
+        .any(|m| m.content.contains("tts") || m.content.contains("voice")));
     assert!(t.messages.iter().any(|m| {
         m.role == MessageRole::Tool
             && m.content.contains("image_gen")
             && (m.content.contains("denied") || m.content.contains("not registered"))
     }));
     // Secrets never in transcript body as raw key leakage from our summarizer path is ok to check events separately
-    assert!(!t.messages.iter().any(|m| m.content.contains("should-not-log")));
+    assert!(!t
+        .messages
+        .iter()
+        .any(|m| m.content.contains("should-not-log")));
 }
 
 /// Config-shaped mock registry → namespaced tools + successful control_plane invoke when Policy allows.
@@ -262,14 +277,12 @@ async fn mcp_config_mock_register_and_control_plane_invoke() {
         &[],
     ));
     assert!(reg.registered_names().contains("mcp.demo.echo"));
-    assert!(reg
-        .catalog()
-        .iter()
-        .any(|t| t.name == "mcp.demo.echo"));
+    assert!(reg.catalog().iter().any(|t| t.name == "mcp.demo.echo"));
 
-    let tools = Arc::new(
-        CompositeTools::new().with(reg.registered_names(), Arc::clone(&reg) as Arc<dyn ToolRuntime>),
-    );
+    let tools = Arc::new(CompositeTools::new().with(
+        reg.registered_names(),
+        Arc::clone(&reg) as Arc<dyn ToolRuntime>,
+    ));
     let store = Arc::new(InMemorySessionStore::new());
     let model = FakeModelProvider::with_script(vec![
         ModelResponse::with_tool_calls(
@@ -359,17 +372,9 @@ async fn mcp_connect_not_allow_denies_without_policy() {
 /// Gateway/schedule reduced origin denies MCP by default even if registered + control_plane extras set.
 #[tokio::test]
 async fn mcp_reduced_origin_denies_by_default() {
-    for origin in [
-        RunOrigin::gateway("telegram"),
-        RunOrigin::Schedule,
-    ] {
+    for origin in [RunOrigin::gateway("telegram"), RunOrigin::Schedule] {
         let peer = Arc::new(MockMcpPeer::default().with_tool("echo", "pong"));
-        let reg = Arc::new(mock_registry_from_peer(
-            "demo",
-            peer,
-            &["echo".into()],
-            &[],
-        ));
+        let reg = Arc::new(mock_registry_from_peer("demo", peer, &["echo".into()], &[]));
         let tools = Arc::new(CompositeTools::new().with(
             reg.registered_names(),
             Arc::clone(&reg) as Arc<dyn ToolRuntime>,
@@ -399,14 +404,7 @@ async fn mcp_reduced_origin_denies_by_default() {
         };
         let s = control.create_session(p.clone()).await.unwrap();
         let run = control
-            .start_run_with_origin(
-                p,
-                s.id,
-                "reduced mcp".into(),
-                origin.clone(),
-                None,
-                None,
-            )
+            .start_run_with_origin(p, s.id, "reduced mcp".into(), origin.clone(), None, None)
             .await
             .unwrap();
         wait_done(&store, run.id).await;

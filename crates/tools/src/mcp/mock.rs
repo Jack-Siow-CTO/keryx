@@ -162,10 +162,9 @@ impl ToolRuntime for McpClientTools {
                 "MCP client disconnect: fail closed for in-flight invocation".into(),
             ));
         }
-        let local = call
-            .name
-            .strip_prefix(&self.namespace)
-            .ok_or_else(|| ToolError::Denied(format!("not an MCP namespaced tool {}", call.name)))?;
+        let local = call.name.strip_prefix(&self.namespace).ok_or_else(|| {
+            ToolError::Denied(format!("not an MCP namespaced tool {}", call.name))
+        })?;
         let result = self
             .peer
             .tools
@@ -260,10 +259,7 @@ mod tests {
             .await
             .unwrap();
         assert!(ok.content.contains("pong"));
-        assert!(tools
-            .catalog()
-            .iter()
-            .any(|t| t.name == "mcp.demo.echo"));
+        assert!(tools.catalog().iter().any(|t| t.name == "mcp.demo.echo"));
         peer.disconnect();
         let err = tools
             .invoke(ToolCall {

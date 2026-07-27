@@ -238,7 +238,7 @@ fn search_under_roots(
         let start = if subpath.is_empty() {
             root_canon.clone()
         } else {
-            resolve_in_workspace(&[root_canon.clone()], subpath)?
+            resolve_in_workspace(std::slice::from_ref(&root_canon), subpath)?
         };
 
         if !start.exists() {

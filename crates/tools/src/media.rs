@@ -15,7 +15,9 @@ pub struct MediaConfig {
 impl Default for MediaConfig {
     fn default() -> Self {
         Self {
-            image_gen_api_key: std::env::var("KERYX_IMAGE_GEN_API_KEY").ok().filter(|s| !s.is_empty()),
+            image_gen_api_key: std::env::var("KERYX_IMAGE_GEN_API_KEY")
+                .ok()
+                .filter(|s| !s.is_empty()),
             tts_enabled: std::env::var("KERYX_TTS_ENABLED")
                 .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
                 .unwrap_or(false),
@@ -37,10 +39,7 @@ impl MediaTools {
     /// Tool names that should register given credentials.
     #[must_use]
     pub fn registerable_tools(config: &MediaConfig) -> HashSet<String> {
-        let mut s = HashSet::from([
-            "vision_describe".into(),
-            "tts_synthesize".into(),
-        ]);
+        let mut s = HashSet::from(["vision_describe".into(), "tts_synthesize".into()]);
         if config.image_gen_api_key.is_some() {
             s.insert("image_gen".into());
         }
@@ -84,7 +83,10 @@ impl ToolRuntime for MediaTools {
                     .and_then(Value::as_str)
                     .unwrap_or("");
                 Ok(ToolResult {
-                    content: format!("tts stub voice-note for {} chars (telegram-first path)", text.len()),
+                    content: format!(
+                        "tts stub voice-note for {} chars (telegram-first path)",
+                        text.len()
+                    ),
                     summary: format!("tts_synthesize chars={}", text.len()),
                 })
             }

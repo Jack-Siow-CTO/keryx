@@ -31,11 +31,7 @@ pub struct ToolSpec {
 
 impl ToolSpec {
     #[must_use]
-    pub fn new(
-        name: impl Into<String>,
-        description: impl Into<String>,
-        parameters: Value,
-    ) -> Self {
+    pub fn new(name: impl Into<String>, description: impl Into<String>, parameters: Value) -> Self {
         Self {
             name: name.into(),
             description: description.into(),
@@ -165,7 +161,13 @@ fn is_secret_like_key(key: &str) -> bool {
     // Exact normalized credential field names (covers access_token / refresh_token / client_secret).
     matches!(
         norm.as_str(),
-        "accesstoken" | "refreshtoken" | "clientsecret" | "privatekey" | "auth" | "credential" | "credentials"
+        "accesstoken"
+            | "refreshtoken"
+            | "clientsecret"
+            | "privatekey"
+            | "auth"
+            | "credential"
+            | "credentials"
     )
 }
 

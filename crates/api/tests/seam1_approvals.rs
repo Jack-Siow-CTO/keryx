@@ -275,7 +275,10 @@ async fn high_blast_wait_then_deny_fails_closed() {
 
     let record = wait_terminal(&app, &run_id).await;
     assert_eq!(record["status"], "completed");
-    assert_eq!(std::fs::read_to_string(ws.join("SOUL.md")).unwrap(), "identity");
+    assert_eq!(
+        std::fs::read_to_string(ws.join("SOUL.md")).unwrap(),
+        "identity"
+    );
 }
 
 #[tokio::test]
@@ -308,12 +311,7 @@ async fn approval_pending_survives_sqlite_reopen() {
     store.create_session(session.clone()).await.unwrap();
     let run = keryx_domain::Run::start(session.id, session.principal_id.clone(), "goal");
     store.create_run(run.clone()).await.unwrap();
-    let approval = Approval::pending(
-        run.id,
-        session.principal_id,
-        "write_file",
-        "path=SOUL.md",
-    );
+    let approval = Approval::pending(run.id, session.principal_id, "write_file", "path=SOUL.md");
     let id = approval.id;
     store.create_approval(approval).await.unwrap();
 

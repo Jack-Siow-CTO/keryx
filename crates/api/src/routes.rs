@@ -29,7 +29,10 @@ pub fn router(state: AppState) -> Router {
         .route("/v1/runs/{run_id}/events", get(stream_run_events))
         .route("/v1/providers", get(list_providers))
         .route("/v1/approvals", get(list_approvals))
-        .route("/v1/approvals/{approval_id}/approve", post(approve_approval))
+        .route(
+            "/v1/approvals/{approval_id}/approve",
+            post(approve_approval),
+        )
         .route("/v1/approvals/{approval_id}/deny", post(deny_approval))
         .route("/v1/schedules", get(list_schedules).post(create_schedule))
         .route("/v1/schedules/{schedule_id}/pause", post(pause_schedule))
@@ -138,13 +141,7 @@ async fn start_run(
         .map_err(|_| ApiError::bad_request("invalid session id"))?;
     let run = state
         .control
-        .start_run(
-            principal,
-            session_id,
-            body.goal,
-            body.provider,
-            body.model,
-        )
+        .start_run(principal, session_id, body.goal, body.provider, body.model)
         .await?;
     Ok((StatusCode::CREATED, Json(run.into())))
 }

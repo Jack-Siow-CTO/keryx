@@ -4,7 +4,9 @@ use axum::body::Body;
 use axum::http::Request;
 use http_body_util::BodyExt;
 use keryx_api::{router, AppState, OperatorTokenTable};
-use keryx_app::{ControlPlane, ControlPlaneService, ModelResponse, RunLimits, SessionStore, ToolCall};
+use keryx_app::{
+    ControlPlane, ControlPlaneService, ModelResponse, RunLimits, SessionStore, ToolCall,
+};
 use keryx_domain::{MessageRole, Principal, RunOrigin};
 use keryx_model::FakeModelProvider;
 use keryx_storage::{InMemorySessionStore, SqliteSessionStore};
@@ -134,7 +136,9 @@ async fn memory_write_search_and_session_search() {
         .unwrap();
     assert!(
         transcript.messages.iter().any(|m| {
-            m.role == MessageRole::Tool && m.content.contains("memory_search") && m.content.contains("dark")
+            m.role == MessageRole::Tool
+                && m.content.contains("memory_search")
+                && m.content.contains("dark")
         }),
         "{:?}",
         transcript.messages
@@ -144,7 +148,9 @@ async fn memory_write_search_and_session_search() {
         transcript.messages.iter().any(|m| {
             m.role == MessageRole::Tool
                 && m.content.contains("session_search")
-                && (m.content.contains("dark") || m.content.contains("remember") || m.content.contains("hits="))
+                && (m.content.contains("dark")
+                    || m.content.contains("remember")
+                    || m.content.contains("hits="))
         }),
         "session_search must return hits over Transcript: {:?}",
         transcript.messages
@@ -154,10 +160,7 @@ async fn memory_write_search_and_session_search() {
         .search_transcripts("remember prefs", 10)
         .await
         .unwrap();
-    assert!(
-        !hits.is_empty(),
-        "search_transcripts should find user goal"
-    );
+    assert!(!hits.is_empty(), "search_transcripts should find user goal");
 }
 
 #[tokio::test]
@@ -237,14 +240,12 @@ async fn memory_survives_sqlite_reopen() {
     let mut updated = store.get_memory(id).await.unwrap().unwrap();
     updated.content = "updated durable fact about project keryx".into();
     store.update_memory(updated).await.unwrap();
-    assert!(
-        store
-            .search_memory("updated", 10)
-            .await
-            .unwrap()
-            .iter()
-            .any(|e| e.id == id)
-    );
+    assert!(store
+        .search_memory("updated", 10)
+        .await
+        .unwrap()
+        .iter()
+        .any(|e| e.id == id));
 
     drop(store);
     let reopened = SqliteSessionStore::open(dir.path()).unwrap();
@@ -256,7 +257,11 @@ async fn memory_survives_sqlite_reopen() {
     // delete
     reopened.delete_memory(id).await.unwrap();
     assert!(reopened.get_memory(id).await.unwrap().is_none());
-    assert!(reopened.search_memory("keryx", 10).await.unwrap().is_empty());
+    assert!(reopened
+        .search_memory("keryx", 10)
+        .await
+        .unwrap()
+        .is_empty());
 }
 
 #[tokio::test]

@@ -159,8 +159,8 @@ fn try_register_openai(
     providers: &mut HashMap<String, Arc<dyn ModelProvider>>,
     descriptors: &mut Vec<ProviderDescriptor>,
 ) -> Result<(), String> {
-    let Some(api_key) = crate::consumer::load_secret_pair("OPENAI_API_KEY")?
-        .filter(|s| !s.is_empty())
+    let Some(api_key) =
+        crate::consumer::load_secret_pair("OPENAI_API_KEY")?.filter(|s| !s.is_empty())
     else {
         return Ok(());
     };
@@ -252,10 +252,7 @@ fn try_register_openai_web(
     }
     // Only register openai_web when cookie is present OR explicit CHATGPT_WEB_PATH / enable.
     // Token-only is the Codex subscription path; cookie (optionally + token) is browser session.
-    let has_cookie = auth
-        .cookie_header
-        .as_ref()
-        .is_some_and(|c| !c.is_empty());
+    let has_cookie = auth.cookie_header.as_ref().is_some_and(|c| !c.is_empty());
     if !has_cookie {
         // Token-only → leave for openai_codex unless operator forces web via path override presence
         // and CHATGPT_WEB_ENABLE=1, or cookie empty but they set CHATGPT_WEB_FORCE=1.
@@ -302,7 +299,9 @@ fn try_register_openai_codex(
 ) -> Result<(), String> {
     // Prefer CHATGPT_CODEX_ACCESS_TOKEN alias, fall back to shared CHATGPT_WEB_ACCESS_TOKEN.
     let token = crate::consumer::load_secret_pair("CHATGPT_CODEX_ACCESS_TOKEN")?
-        .or(crate::consumer::load_secret_pair("CHATGPT_WEB_ACCESS_TOKEN")?)
+        .or(crate::consumer::load_secret_pair(
+            "CHATGPT_WEB_ACCESS_TOKEN",
+        )?)
         .filter(|t| !t.is_empty());
     let Some(token) = token else {
         return Ok(());

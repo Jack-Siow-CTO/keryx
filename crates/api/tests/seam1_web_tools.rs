@@ -128,7 +128,9 @@ async fn web_search_and_extract_happy_path_with_summarized_events() {
                 .uri(format!("/v1/sessions/{session_id}/runs"))
                 .header("authorization", format!("Bearer {TOKEN}"))
                 .header("content-type", "application/json")
-                .body(Body::from(json!({ "goal": "search and extract" }).to_string()))
+                .body(Body::from(
+                    json!({ "goal": "search and extract" }).to_string(),
+                ))
                 .unwrap(),
         )
         .await

@@ -100,8 +100,7 @@ pub fn validate_server_id(id: &str) -> Result<(), String> {
 
 /// Parse MCP config JSON (pure).
 pub fn parse_mcp_config_json(raw: &str) -> Result<McpConfig, String> {
-    let cfg: McpConfig =
-        serde_json::from_str(raw).map_err(|e| format!("MCP config JSON: {e}"))?;
+    let cfg: McpConfig = serde_json::from_str(raw).map_err(|e| format!("MCP config JSON: {e}"))?;
     validate_mcp_config(&cfg)?;
     Ok(cfg)
 }
@@ -192,6 +191,8 @@ mod tests {
             { "server_id": "a", "transport": { "type": "stdio", "command": "y" } }
           ]
         }"#;
-        assert!(parse_mcp_config_json(raw).unwrap_err().contains("duplicate"));
+        assert!(parse_mcp_config_json(raw)
+            .unwrap_err()
+            .contains("duplicate"));
     }
 }

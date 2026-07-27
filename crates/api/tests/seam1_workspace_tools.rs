@@ -346,7 +346,9 @@ async fn apply_patch_and_search_files_happy_path_and_jail() {
                 .uri(format!("/v1/sessions/{session_id}/runs"))
                 .header("authorization", format!("Bearer {TOKEN}"))
                 .header("content-type", "application/json")
-                .body(Body::from(json!({ "goal": "patch and search" }).to_string()))
+                .body(Body::from(
+                    json!({ "goal": "patch and search" }).to_string(),
+                ))
                 .unwrap(),
         )
         .await

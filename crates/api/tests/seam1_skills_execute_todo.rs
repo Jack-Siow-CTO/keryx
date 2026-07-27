@@ -1,11 +1,13 @@
 //! Seam 1 — Skills, execute_code fence, todo + clarify.
 
-use keryx_app::{ControlPlane, ControlPlaneService, ModelResponse, RunLimits, SessionStore, ToolCall};
+use keryx_app::{
+    ControlPlane, ControlPlaneService, ModelResponse, RunLimits, SessionStore, ToolCall,
+};
 use keryx_domain::{MessageRole, Principal, RunOrigin};
 use keryx_model::FakeModelProvider;
 use keryx_storage::InMemorySessionStore;
 use keryx_tools::{
-    ClarifyQueue, CompositeTools, ExecuteCodeTools, OperatorTools, SkillDraftStore, SkillsTools,
+    ClarifyQueue, ExecuteCodeTools, OperatorTools, SkillDraftStore, SkillsTools,
     TodoState, WorkspaceFsTools,
 };
 use serde_json::json;

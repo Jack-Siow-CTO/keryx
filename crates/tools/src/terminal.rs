@@ -55,7 +55,10 @@ impl ExecBackendRunner for SystemExecRunner {
         match backend {
             ExecBackend::Local => {
                 let mut cmd = tokio::process::Command::new("sh");
-                cmd.arg("-c").arg(command).stdout(Stdio::piped()).stderr(Stdio::piped());
+                cmd.arg("-c")
+                    .arg(command)
+                    .stdout(Stdio::piped())
+                    .stderr(Stdio::piped());
                 if let Some(c) = cwd {
                     cmd.current_dir(c);
                 }
@@ -127,7 +130,10 @@ impl ExecBackendRunner for FixedExecRunner {
         if command.contains("DENY") {
             return Err(ToolError::Failed("fixed runner deny".into()));
         }
-        let mut guard = self.responses.lock().map_err(|e| ToolError::Failed(e.to_string()))?;
+        let mut guard = self
+            .responses
+            .lock()
+            .map_err(|e| ToolError::Failed(e.to_string()))?;
         if let Some(r) = guard.pop() {
             return Ok(format!("[{backend:?}] {r}"));
         }
@@ -303,7 +309,9 @@ fn resolve_cwd(roots: &[PathBuf], user: &str) -> Result<PathBuf, ToolError> {
             .map_err(|e| ToolError::PathJail(e.to_string()))?;
         let joined = root.join(user);
         let resolved = if joined.exists() {
-            joined.canonicalize().map_err(|e| ToolError::PathJail(e.to_string()))?
+            joined
+                .canonicalize()
+                .map_err(|e| ToolError::PathJail(e.to_string()))?
         } else {
             return Err(ToolError::PathJail("cwd does not exist".into()));
         };

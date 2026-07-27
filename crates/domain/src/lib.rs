@@ -43,11 +43,7 @@ mod tests {
 
     #[test]
     fn run_start_stamps_control_plane_origin() {
-        let run = Run::start(
-            SessionId::new(),
-            PrincipalId::new("op"),
-            "goal",
-        );
+        let run = Run::start(SessionId::new(), PrincipalId::new("op"), "goal");
         assert_eq!(run.origin, RunOrigin::ControlPlane);
     }
 

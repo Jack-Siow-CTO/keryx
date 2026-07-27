@@ -75,7 +75,9 @@ impl ToolRuntime for ExecuteCodeTools {
         // Script language: lines of `tool NAME {json}` or comments `#`.
         for (lineno, raw) in code.lines().enumerate() {
             if started.elapsed() > self.max_duration {
-                return Err(ToolError::Failed("execute_code: time quota exceeded".into()));
+                return Err(ToolError::Failed(
+                    "execute_code: time quota exceeded".into(),
+                ));
             }
             let line = raw.trim();
             if line.is_empty() || line.starts_with('#') {
@@ -88,9 +90,8 @@ impl ToolRuntime for ExecuteCodeTools {
                         "execute_code: RPC call quota exceeded".into(),
                     ));
                 }
-                let (name, args_json) = parse_tool_line(rest).map_err(|e| {
-                    ToolError::Failed(format!("line {}: {e}", lineno + 1))
-                })?;
+                let (name, args_json) = parse_tool_line(rest)
+                    .map_err(|e| ToolError::Failed(format!("line {}: {e}", lineno + 1)))?;
                 let nested = ToolCall {
                     name: name.clone(),
                     arguments: args_json,

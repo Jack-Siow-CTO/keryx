@@ -82,11 +82,10 @@ impl ClarifyQueue {
     }
 
     pub fn take_answer(&self, id: &str) -> Option<String> {
-        self.pending.lock().ok().and_then(|p| {
-            p.iter()
-                .find(|c| c.id == id)
-                .and_then(|c| c.answer.clone())
-        })
+        self.pending
+            .lock()
+            .ok()
+            .and_then(|p| p.iter().find(|c| c.id == id).and_then(|c| c.answer.clone()))
     }
 }
 
@@ -132,10 +131,7 @@ impl ToolRuntime for OperatorTools {
 
 impl OperatorTools {
     async fn todo(&self, args: &Value) -> Result<ToolResult, ToolError> {
-        let action = args
-            .get("action")
-            .and_then(Value::as_str)
-            .unwrap_or("list");
+        let action = args.get("action").and_then(Value::as_str).unwrap_or("list");
         match action {
             "add" => {
                 let item = args

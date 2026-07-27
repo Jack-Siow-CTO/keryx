@@ -7,7 +7,9 @@ use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use http_body_util::BodyExt;
 use keryx_api::{router, AppState, OperatorTokenTable};
-use keryx_app::{ControlPlane, ControlPlaneService, ModelResponse, RunLimits, SessionStore, ToolCall};
+use keryx_app::{
+    ControlPlane, ControlPlaneService, ModelResponse, RunLimits, SessionStore, ToolCall,
+};
 use keryx_domain::{MessageRole, Principal, RunOrigin};
 use keryx_model::FakeModelProvider;
 use keryx_storage::{InMemorySessionStore, SqliteSessionStore};
@@ -282,7 +284,9 @@ async fn reduced_schedule_origin_denies_unknown_and_write() {
         .collect();
     assert_eq!(tool_msgs.len(), 2, "both tools should produce deny results");
     assert!(
-        tool_msgs.iter().all(|c| c.contains("denied") || c.contains("Policy")),
+        tool_msgs
+            .iter()
+            .all(|c| c.contains("denied") || c.contains("Policy")),
         "expected fail-closed denials: {tool_msgs:?}"
     );
     assert!(!root.path().join("x.txt").exists());

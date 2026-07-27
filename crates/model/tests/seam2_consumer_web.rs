@@ -204,7 +204,7 @@ data: {\"type\":\"response.completed\"}\n\n";
                 extra_headers: extra,
             },
             user_agent: "keryx-test".into(),
-        allowed_models: Vec::new(),
+            allowed_models: Vec::new(),
         },
         Some("low".into()),
     )

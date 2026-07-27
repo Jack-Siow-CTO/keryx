@@ -19,9 +19,9 @@ use tokio::time::timeout;
 use super::config::{McpConfig, McpServerConfig, McpTransportConfig};
 use super::mock::MockMcpPeer;
 use super::protocol::{
-    encode_framed, namespaced_tool_name, parse_namespaced_tool, try_decode_framed, JsonRpcNotification,
-    JsonRpcRequest, JsonRpcResponse, McpToolDef, ToolsCallResult, ToolsListResult,
-    PROTOCOL_VERSION,
+    encode_framed, namespaced_tool_name, parse_namespaced_tool, try_decode_framed,
+    JsonRpcNotification, JsonRpcRequest, JsonRpcResponse, McpToolDef, ToolsCallResult,
+    ToolsListResult, PROTOCOL_VERSION,
 };
 
 const DEFAULT_TIMEOUT_MS: u64 = 30_000;
@@ -213,11 +213,7 @@ fn empty_schema() -> Value {
 
 #[async_trait]
 trait McpTransport: Send + Sync {
-    async fn request(
-        &self,
-        method: &str,
-        params: Option<Value>,
-    ) -> Result<Value, ToolError>;
+    async fn request(&self, method: &str, params: Option<Value>) -> Result<Value, ToolError>;
 
     /// Fire-and-forget JSON-RPC notification (no response wait).
     async fn notify(&self, method: &str, params: Option<Value>) -> Result<(), ToolError>;
@@ -249,11 +245,7 @@ struct MockTransport {
 
 #[async_trait]
 impl McpTransport for MockTransport {
-    async fn request(
-        &self,
-        method: &str,
-        params: Option<Value>,
-    ) -> Result<Value, ToolError> {
+    async fn request(&self, method: &str, params: Option<Value>) -> Result<Value, ToolError> {
         if !self.is_connected() || self.peer.is_disconnected() {
             self.connected.store(false, Ordering::SeqCst);
             return Err(ToolError::Failed(
@@ -333,11 +325,7 @@ struct RemoteHttpTransport {
 
 #[async_trait]
 impl McpTransport for RemoteHttpTransport {
-    async fn request(
-        &self,
-        method: &str,
-        params: Option<Value>,
-    ) -> Result<Value, ToolError> {
+    async fn request(&self, method: &str, params: Option<Value>) -> Result<Value, ToolError> {
         if !self.is_connected() {
             return Err(ToolError::Failed(
                 "MCP remote disconnected (fail closed)".into(),
@@ -447,11 +435,7 @@ impl Drop for StdioTransport {
 
 #[async_trait]
 impl McpTransport for StdioTransport {
-    async fn request(
-        &self,
-        method: &str,
-        params: Option<Value>,
-    ) -> Result<Value, ToolError> {
+    async fn request(&self, method: &str, params: Option<Value>) -> Result<Value, ToolError> {
         if !self.is_connected() {
             return Err(ToolError::Failed(format!(
                 "MCP stdio '{}' disconnected (fail closed)",
@@ -468,10 +452,7 @@ impl McpTransport for StdioTransport {
             let mut stdin_guard = self.stdin.lock().await;
             let stdin = stdin_guard.as_mut().ok_or_else(|| {
                 self.connected.store(false, Ordering::SeqCst);
-                ToolError::Failed(format!(
-                    "MCP stdio '{}': stdin closed",
-                    self.server_id
-                ))
+                ToolError::Failed(format!("MCP stdio '{}': stdin closed", self.server_id))
             })?;
             stdin.write_all(&framed).await.map_err(|e| {
                 self.connected.store(false, Ordering::SeqCst);
@@ -525,10 +506,7 @@ impl McpTransport for StdioTransport {
         let mut stdin_guard = self.stdin.lock().await;
         let stdin = stdin_guard.as_mut().ok_or_else(|| {
             self.connected.store(false, Ordering::SeqCst);
-            ToolError::Failed(format!(
-                "MCP stdio '{}': stdin closed",
-                self.server_id
-            ))
+            ToolError::Failed(format!("MCP stdio '{}': stdin closed", self.server_id))
         })?;
         stdin.write_all(&framed).await.map_err(|e| {
             self.connected.store(false, Ordering::SeqCst);
@@ -562,15 +540,12 @@ impl StdioTransport {
         let mut stdout_guard = self.stdout.lock().await;
         let stdout = stdout_guard.as_mut().ok_or_else(|| {
             self.connected.store(false, Ordering::SeqCst);
-            ToolError::Failed(format!(
-                "MCP stdio '{}': stdout closed",
-                self.server_id
-            ))
+            ToolError::Failed(format!("MCP stdio '{}': stdout closed", self.server_id))
         })?;
 
         loop {
-            if let Some((body, n)) = try_decode_framed(&buf)
-                .map_err(|e| ToolError::Failed(format!("MCP frame: {e}")))?
+            if let Some((body, n)) =
+                try_decode_framed(&buf).map_err(|e| ToolError::Failed(format!("MCP frame: {e}")))?
             {
                 buf.drain(..n);
                 return Ok(body);
@@ -628,9 +603,8 @@ async fn initialize_session(
     let list_val = transport
         .request_timeout("tools/list", Some(json!({})), limit)
         .await?;
-    let list: ToolsListResult = serde_json::from_value(list_val).map_err(|e| {
-        ToolError::Failed(format!("MCP tools/list parse on '{server_id}': {e}"))
-    })?;
+    let list: ToolsListResult = serde_json::from_value(list_val)
+        .map_err(|e| ToolError::Failed(format!("MCP tools/list parse on '{server_id}': {e}")))?;
 
     let filter_set: HashSet<&str> = filter.iter().map(String::as_str).collect();
     let tools = list
@@ -640,9 +614,7 @@ async fn initialize_session(
         .map(|t: McpToolDef| RegisteredMcpTool {
             namespaced: namespaced_tool_name(server_id, &t.name),
             local_name: t.name,
-            description: t
-                .description
-                .unwrap_or_else(|| "MCP tool".into()),
+            description: t.description.unwrap_or_else(|| "MCP tool".into()),
             parameters: t.input_schema.unwrap_or_else(empty_schema),
         })
         .collect();
@@ -858,10 +830,7 @@ impl McpClientRegistry {
     /// Registered namespaced tool names (all connected servers).
     #[must_use]
     pub fn registered_names(&self) -> HashSet<String> {
-        self.names
-            .lock()
-            .map(|n| n.clone())
-            .unwrap_or_default()
+        self.names.lock().map(|n| n.clone()).unwrap_or_default()
     }
 
     #[must_use]
@@ -876,10 +845,7 @@ impl McpClientRegistry {
 
     #[must_use]
     pub fn doctor_report(&self) -> McpDoctorReport {
-        self.doctor
-            .lock()
-            .map(|d| d.clone())
-            .unwrap_or_default()
+        self.doctor.lock().map(|d| d.clone()).unwrap_or_default()
     }
 
     /// Fail-closed disconnect of all sessions (Worker shutdown / tests).

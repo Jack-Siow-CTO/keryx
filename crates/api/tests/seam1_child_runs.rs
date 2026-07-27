@@ -93,13 +93,7 @@ async fn session_still_one_active_root_while_child_runs() {
     };
     let session = control.create_session(principal.clone()).await.unwrap();
     let parent = control
-        .start_run(
-            principal.clone(),
-            session.id,
-            "root".into(),
-            None,
-            None,
-        )
+        .start_run(principal.clone(), session.id, "root".into(), None, None)
         .await
         .unwrap();
     let _child = control

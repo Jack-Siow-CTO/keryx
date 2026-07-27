@@ -29,9 +29,9 @@ pub use terminal::{
     ExecBackend, ExecBackendRunner, FixedExecRunner, SystemExecRunner, TerminalTools,
 };
 pub use web::{
-    assert_resolved_public, is_public_ip, validate_public_http_url, CompositeTools, FixedWebExtract,
-    FixedWebSearch, HttpWebExtract, SearchHit, UnconfiguredWebSearch, WebExtractBackend,
-    WebSearchBackend, WebTools,
+    assert_resolved_public, is_public_ip, validate_public_http_url, CompositeTools,
+    FixedWebExtract, FixedWebSearch, HttpWebExtract, SearchHit, UnconfiguredWebSearch,
+    WebExtractBackend, WebSearchBackend, WebTools,
 };
 pub use workspace::{resolve_in_workspace, WorkspaceFsTools};
 

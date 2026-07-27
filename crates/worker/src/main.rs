@@ -128,9 +128,8 @@ async fn run() -> Result<(), String> {
     // Telegram Gateway long-poll (optional; fail closed if token invalid at getMe).
     if let Ok(tg_token) = std::env::var("KERYX_TELEGRAM_BOT_TOKEN") {
         if !tg_token.trim().is_empty() {
-            let allow = ChatAllowlist::from_env_csv(
-                std::env::var("KERYX_TELEGRAM_ALLOWED_CHAT_IDS").ok(),
-            );
+            let allow =
+                ChatAllowlist::from_env_csv(std::env::var("KERYX_TELEGRAM_ALLOWED_CHAT_IDS").ok());
             let principal_name = config
                 .operator_tokens
                 .first()
@@ -294,10 +293,7 @@ async fn doctor() -> Result<(), String> {
     if config.context_files.is_empty() {
         println!("info no KERYX_CONTEXT_FILES — no workspace Context auto-attach");
     } else {
-        println!(
-            "ok   Context files configured: {:?}",
-            config.context_files
-        );
+        println!("ok   Context files configured: {:?}", config.context_files);
     }
 
     // v2 readiness surfaces

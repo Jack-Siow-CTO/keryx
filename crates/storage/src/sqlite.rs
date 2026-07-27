@@ -211,6 +211,7 @@ fn parse_run_origin(s: &str) -> Result<RunOrigin, String> {
     RunOrigin::from_str(s).map_err(|e| e.to_string())
 }
 
+#[allow(clippy::too_many_arguments)] // row mapper mirrors SQL columns
 fn row_to_run(
     id: String,
     session_id: String,
@@ -728,16 +729,15 @@ impl SessionStore for SqliteSessionStore {
                  LIMIT ?2",
             )
             .map_err(|e| e.to_string())?;
-        let rows = stmt
-            .query_map(params![fts_q, limit.max(1) as i64], |row| {
-                Ok((
-                    row.get::<_, String>(0)?,
-                    row.get::<_, String>(1)?,
-                    row.get::<_, Option<String>>(2)?,
-                    row.get::<_, Option<String>>(3)?,
-                    row.get::<_, Option<String>>(4)?,
-                ))
-            });
+        let rows = stmt.query_map(params![fts_q, limit.max(1) as i64], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, Option<String>>(2)?,
+                row.get::<_, Option<String>>(3)?,
+                row.get::<_, Option<String>>(4)?,
+            ))
+        });
         match rows {
             Ok(rows) => {
                 let mut out = Vec::new();
@@ -930,8 +930,17 @@ impl SessionStore for SqliteSessionStore {
             .map_err(|e| e.to_string())?;
         let mut out = Vec::new();
         for row in rows {
-            let (id, principal_id, session_id, goal, interval_secs, status, next_fire_at, tools, last) =
-                row.map_err(|e| e.to_string())?;
+            let (
+                id,
+                principal_id,
+                session_id,
+                goal,
+                interval_secs,
+                status,
+                next_fire_at,
+                tools,
+                last,
+            ) = row.map_err(|e| e.to_string())?;
             out.push(row_to_schedule(
                 id,
                 principal_id,
@@ -969,6 +978,7 @@ fn parse_schedule_id(s: &str) -> Result<ScheduleId, String> {
     ScheduleId::from_str(s).map_err(|e| e.to_string())
 }
 
+#[allow(clippy::too_many_arguments)] // row mapper mirrors SQL columns
 fn row_to_schedule(
     id: String,
     principal_id: String,

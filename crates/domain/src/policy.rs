@@ -197,9 +197,7 @@ mod tests {
         ] {
             let p = Policy::for_origin(&origin);
             assert!(
-                !p.allowed_tools
-                    .iter()
-                    .any(|t| Policy::is_mcp_tool_name(t)),
+                !p.allowed_tools.iter().any(|t| Policy::is_mcp_tool_name(t)),
                 "reduced origin {origin} must not include MCP tools"
             );
             assert!(!p.allows_tool("mcp.demo.echo"), "{origin}");
@@ -222,8 +220,8 @@ mod tests {
     #[test]
     fn child_subset_cannot_gain_mcp() {
         let parent = Policy::control_plane_default().with_extra_tools(["mcp.mail.search".into()]);
-        let child_want = Policy::deny_all()
-            .with_extra_tools(["mcp.mail.search".into(), "mcp.mail.send".into()]);
+        let child_want =
+            Policy::deny_all().with_extra_tools(["mcp.mail.search".into(), "mcp.mail.send".into()]);
         let child = child_want.subset_of(&parent);
         assert!(child.allows_tool("mcp.mail.search"));
         assert!(!child.allows_tool("mcp.mail.send"));

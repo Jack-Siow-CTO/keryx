@@ -15,10 +15,16 @@ pub struct RunEvent {
 pub enum RunEventKind {
     RunStarted,
     ModelStarted,
-    ModelDelta { text: String },
+    ModelDelta {
+        text: String,
+    },
     ModelFinished,
-    ToolStarted { name: String },
-    ToolFinished { name: String },
+    ToolStarted {
+        name: String,
+    },
+    ToolFinished {
+        name: String,
+    },
     /// Active Run is blocked on an Approval decision.
     ApprovalWaiting {
         approval_id: String,
@@ -41,9 +47,13 @@ pub enum RunEventKind {
         child_run_id: String,
         status: String,
     },
-    RunBudget { message: String },
+    RunBudget {
+        message: String,
+    },
     RunCompleted,
-    RunFailed { reason: String },
+    RunFailed {
+        reason: String,
+    },
     RunCancelled,
 }
 

@@ -78,9 +78,7 @@ impl OpenAiCompatibleConfig {
             .filter(|s| !s.is_empty())
             .unwrap_or(self.model.as_str())
             .to_string();
-        if !self.allowed_models.is_empty()
-            && !self.allowed_models.iter().any(|m| m == &model)
-        {
+        if !self.allowed_models.is_empty() && !self.allowed_models.iter().any(|m| m == &model) {
             return Err(ModelError::new(format!(
                 "{}: model '{model}' not in allowlist {:?}",
                 self.provider_name, self.allowed_models
@@ -161,9 +159,8 @@ pub fn parse_tool_calls(value: &Value) -> Result<Vec<ToolCall>, ModelError> {
                 if s.trim().is_empty() {
                     json!({})
                 } else {
-                    serde_json::from_str(&s).map_err(|e| {
-                        ModelError::new(format!("tool_call arguments JSON: {e}"))
-                    })?
+                    serde_json::from_str(&s)
+                        .map_err(|e| ModelError::new(format!("tool_call arguments JSON: {e}")))?
                 }
             }
             other => other,
@@ -360,7 +357,7 @@ fn finalize_streamed_tool_calls(
     acc: &BTreeMap<u32, StreamToolCallAcc>,
 ) -> Result<Vec<ToolCall>, ModelError> {
     let mut out = Vec::new();
-    for (_idx, entry) in acc {
+    for entry in acc.values() {
         if entry.name.is_empty() {
             continue;
         }
@@ -474,10 +471,12 @@ mod unit_tests {
     #[test]
     fn openai_tool_name_round_trip() {
         assert_eq!(to_openai_tool_name("mcp.mail.search"), "mcp__mail__search");
-        assert_eq!(from_openai_tool_name("mcp__mail__search"), "mcp.mail.search");
+        assert_eq!(
+            from_openai_tool_name("mcp__mail__search"),
+            "mcp.mail.search"
+        );
         assert_eq!(to_openai_tool_name("read_file"), "read_file");
         assert_eq!(from_openai_tool_name("read_file"), "read_file");
         assert!(to_openai_tool_name("mcp.a.b").len() <= 64);
     }
 }
-

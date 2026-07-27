@@ -1,7 +1,7 @@
 //! Seam 1 — Terminal tools: docker default for reduced, local Approval for control_plane.
 
 use axum::body::Body;
-use axum::http::{Request, StatusCode};
+use axum::http::Request;
 use http_body_util::BodyExt;
 use keryx_api::{router, AppState, OperatorTokenTable};
 use keryx_app::{
@@ -22,14 +22,7 @@ const TOKEN: &str = "test-operator-token";
 const PRINCIPAL: &str = "operator-main";
 
 async fn body_json(r: axum::response::Response) -> Value {
-    serde_json::from_slice(
-        &r.into_body()
-            .collect()
-            .await
-            .unwrap()
-            .to_bytes(),
-    )
-    .unwrap()
+    serde_json::from_slice(&r.into_body().collect().await.unwrap().to_bytes()).unwrap()
 }
 
 #[tokio::test]
@@ -121,7 +114,9 @@ async fn control_plane_local_exec_requires_approval_then_runs() {
     let transcript = store.get_transcript(session.id).await.unwrap();
     assert!(
         transcript.messages.iter().any(|m| {
-            m.role == MessageRole::Tool && m.content.contains("run_terminal") && m.content.contains("Local")
+            m.role == MessageRole::Tool
+                && m.content.contains("run_terminal")
+                && m.content.contains("Local")
         }),
         "{:?}",
         transcript.messages
@@ -236,9 +231,10 @@ async fn reduced_origin_docker_backend_works_with_double() {
     }
     let transcript = store.get_transcript(session.id).await.unwrap();
     assert!(
-        transcript.messages.iter().any(|m| {
-            m.role == MessageRole::Tool && m.content.contains("Docker")
-        }),
+        transcript
+            .messages
+            .iter()
+            .any(|m| { m.role == MessageRole::Tool && m.content.contains("Docker") }),
         "{:?}",
         transcript.messages
     );

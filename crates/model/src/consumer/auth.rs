@@ -62,9 +62,7 @@ impl ConsumerWebConfig {
             .filter(|s| !s.is_empty())
             .unwrap_or(self.model.as_str())
             .to_string();
-        if !self.allowed_models.is_empty()
-            && !self.allowed_models.iter().any(|m| m == &model)
-        {
+        if !self.allowed_models.is_empty() && !self.allowed_models.iter().any(|m| m == &model) {
             return Err(format!(
                 "{}: model '{model}' not in allowlist {:?}",
                 self.provider_name, self.allowed_models

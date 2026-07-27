@@ -102,7 +102,7 @@ where
         self.store
             .create_memory(entry)
             .await
-            .map_err(|e| ToolError::Failed(e))?;
+            .map_err(ToolError::Failed)?;
         Ok(ToolResult {
             content: format!("memory stored id={id}"),
             summary: format!("memory_write id={id}"),
@@ -116,7 +116,7 @@ where
             .store
             .get_memory(id)
             .await
-            .map_err(|e| ToolError::Failed(e))?
+            .map_err(ToolError::Failed)?
             .ok_or_else(|| ToolError::Failed(format!("memory {id} not found")))?;
         if let Some(content) = args.get("content").and_then(Value::as_str) {
             if content.trim().is_empty() {
@@ -130,7 +130,7 @@ where
         self.store
             .update_memory(entry)
             .await
-            .map_err(|e| ToolError::Failed(e))?;
+            .map_err(ToolError::Failed)?;
         Ok(ToolResult {
             content: format!("memory updated id={id}"),
             summary: format!("memory_update id={id}"),
@@ -143,7 +143,7 @@ where
         self.store
             .delete_memory(id)
             .await
-            .map_err(|e| ToolError::Failed(e))?;
+            .map_err(ToolError::Failed)?;
         Ok(ToolResult {
             content: format!("memory deleted id={id}"),
             summary: format!("memory_delete id={id}"),
@@ -157,14 +157,9 @@ where
             .store
             .get_memory(id)
             .await
-            .map_err(|e| ToolError::Failed(e))?
+            .map_err(ToolError::Failed)?
             .ok_or_else(|| ToolError::Failed(format!("memory {id} not found")))?;
-        let body = format!(
-            "id={} label={:?}\n{}",
-            entry.id,
-            entry.label,
-            entry.content
-        );
+        let body = format!("id={} label={:?}\n{}", entry.id, entry.label, entry.content);
         Ok(ToolResult {
             summary: format!("memory_read id={} chars={}", entry.id, entry.content.len()),
             content: body,
@@ -182,7 +177,7 @@ where
             .store
             .search_memory(&query, limit)
             .await
-            .map_err(|e| ToolError::Failed(e))?;
+            .map_err(ToolError::Failed)?;
         let content = if hits.is_empty() {
             format!("no memory matches for {query:?}")
         } else {
@@ -215,7 +210,7 @@ where
             .store
             .search_transcripts(&query, limit)
             .await
-            .map_err(|e| ToolError::Failed(e))?;
+            .map_err(ToolError::Failed)?;
         let content = if hits.is_empty() {
             format!("no transcript matches for {query:?}")
         } else {

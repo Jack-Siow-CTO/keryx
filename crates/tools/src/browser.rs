@@ -67,7 +67,11 @@ impl ToolRuntime for BrowserTools {
                 summary: "browser_wait".into(),
             }),
             "browser_tabs" => {
-                let tabs = self.state.tabs.lock().map_err(|e| ToolError::Failed(e.to_string()))?;
+                let tabs = self
+                    .state
+                    .tabs
+                    .lock()
+                    .map_err(|e| ToolError::Failed(e.to_string()))?;
                 Ok(ToolResult {
                     content: tabs.join("\n"),
                     summary: format!("browser_tabs n={}", tabs.len()),
@@ -90,7 +94,11 @@ impl BrowserTools {
         if let Ok(parsed) = url::Url::parse(url) {
             if let Some(host) = parsed.host_str() {
                 if !self.state.domain_allowlist.is_empty()
-                    && !self.state.domain_allowlist.iter().any(|d| host.ends_with(d))
+                    && !self
+                        .state
+                        .domain_allowlist
+                        .iter()
+                        .any(|d| host.ends_with(d))
                 {
                     // Approval-class deny for high-blast off-allowlist (fail closed for reduced).
                     if self.origin.is_reduced_trust() {
@@ -145,10 +153,7 @@ impl BrowserTools {
     }
 
     async fn type_text(&self, args: &Value) -> Result<ToolResult, ToolError> {
-        let text = args
-            .get("text")
-            .and_then(Value::as_str)
-            .unwrap_or("");
+        let text = args.get("text").and_then(Value::as_str).unwrap_or("");
         // Redact secrets-like in summary only.
         Ok(ToolResult {
             content: format!("typed {} chars", text.len()),

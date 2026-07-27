@@ -44,7 +44,9 @@ pub struct FixedWebSearch {
 impl WebSearchBackend for FixedWebSearch {
     async fn search(&self, query: &str, max_results: usize) -> Result<Vec<SearchHit>, ToolError> {
         if query.trim().is_empty() {
-            return Err(ToolError::Failed("web_search: query must not be empty".into()));
+            return Err(ToolError::Failed(
+                "web_search: query must not be empty".into(),
+            ));
         }
         let mut out = self.hits.clone();
         out.truncate(max_results.max(1));
@@ -316,11 +318,15 @@ pub fn is_public_ip(ip: IpAddr) -> bool {
             if seg[0] == 0x2001 && seg[1] == 0x0db8 {
                 return false;
             }
+            // Manual ULA / link-local checks (avoid Ipv6Addr methods that need MSRV 1.84+).
+            let s0 = v6.segments()[0];
+            let unique_local = (s0 & 0xfe00) == 0xfc00; // fc00::/7
+            let unicast_link_local = (s0 & 0xffc0) == 0xfe80; // fe80::/10
             !(v6.is_loopback()
                 || v6.is_unspecified()
                 || v6.is_multicast()
-                || v6.is_unique_local()
-                || v6.is_unicast_link_local())
+                || unique_local
+                || unicast_link_local)
         }
     }
 }
@@ -355,7 +361,6 @@ const WEB_EXTRACT_MAX_REDIRECTS: usize = 3;
 pub struct HttpWebExtract;
 
 impl HttpWebExtract {
-    #[must_use]
     pub fn new() -> Result<Self, ToolError> {
         Ok(Self)
     }
@@ -369,9 +374,7 @@ impl WebExtractBackend for HttpWebExtract {
             let (status, location, body) = fetch_one_hop(&current).await?;
             if status.is_redirection() {
                 if hop == WEB_EXTRACT_MAX_REDIRECTS {
-                    return Err(ToolError::Denied(
-                        "web_extract: too many redirects".into(),
-                    ));
+                    return Err(ToolError::Denied("web_extract: too many redirects".into()));
                 }
                 let next = location.ok_or_else(|| {
                     ToolError::Failed("web_extract: redirect without Location".into())
@@ -388,9 +391,7 @@ impl WebExtractBackend for HttpWebExtract {
                 continue;
             }
             if !status.is_success() {
-                return Err(ToolError::Failed(format!(
-                    "web_extract: HTTP {status}"
-                )));
+                return Err(ToolError::Failed(format!("web_extract: HTTP {status}")));
             }
             return Ok(body);
         }
@@ -401,7 +402,9 @@ impl WebExtractBackend for HttpWebExtract {
 }
 
 /// One non-following GET with form SSRF checks + DNS pin to public addresses only.
-async fn fetch_one_hop(url: &str) -> Result<(reqwest::StatusCode, Option<String>, String), ToolError> {
+async fn fetch_one_hop(
+    url: &str,
+) -> Result<(reqwest::StatusCode, Option<String>, String), ToolError> {
     validate_public_http_url(url)?;
     let parsed = url::Url::parse(url)
         .map_err(|e| ToolError::Failed(format!("web_extract: invalid url: {e}")))?;
@@ -589,10 +592,7 @@ mod tests {
             }],
         });
         let extract = Arc::new(FixedWebExtract {
-            pages: HashMap::from([(
-                "https://example.com".into(),
-                "Example Domain body".into(),
-            )]),
+            pages: HashMap::from([("https://example.com".into(), "Example Domain body".into())]),
             enforce_ssrf: true,
         });
         let tools = WebTools::new(

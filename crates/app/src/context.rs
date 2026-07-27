@@ -57,9 +57,10 @@ pub fn load_run_context(config: &RunContextConfig) -> LoadedRunContext {
         push_protected(&mut out.protected_paths, soul_path);
         match std::fs::read_to_string(soul_path) {
             Ok(content) if !content.trim().is_empty() => {
-                out.messages.push(keryx_domain::TranscriptMessage::system(
-                    format!("[Soul]\n{content}"),
-                ));
+                out.messages
+                    .push(keryx_domain::TranscriptMessage::system(format!(
+                        "[Soul]\n{content}"
+                    )));
             }
             Ok(_) | Err(_) => {
                 if matches!(config.missing, MissingContextPolicy::Soft) {
@@ -149,7 +150,9 @@ pub fn resolve_context_path_jailed(roots: &[PathBuf], user_path: &str) -> Result
                     Component::CurDir => {}
                     Component::Normal(s) => base.push(s),
                     Component::RootDir | Component::Prefix(_) => {
-                        return Err("absolute components not allowed in relative context path".into());
+                        return Err(
+                            "absolute components not allowed in relative context path".into()
+                        );
                     }
                 }
             }
@@ -291,10 +294,7 @@ mod tests {
         std::fs::create_dir_all(&ws).unwrap();
         std::fs::write(dir.path().join("secret.md"), "nope").unwrap();
         let err = resolve_context_path_jailed(&[ws], "../secret.md").unwrap_err();
-        assert!(
-            err.contains("escapes") || err.contains("outside"),
-            "{err}"
-        );
+        assert!(err.contains("escapes") || err.contains("outside"), "{err}");
     }
 
     #[test]
@@ -307,18 +307,14 @@ mod tests {
         let protected = vec![ctx.canonicalize().unwrap()];
         assert!(path_targets_protected(
             "CONTEXT.md",
-            &[ws.clone()],
+            std::slice::from_ref(&ws),
             &protected
         ));
         assert!(path_targets_protected(
             "context.md",
-            &[ws.clone()],
+            std::slice::from_ref(&ws),
             &protected
         ));
-        assert!(!path_targets_protected(
-            "other.md",
-            &[ws],
-            &protected
-        ));
+        assert!(!path_targets_protected("other.md", &[ws], &protected));
     }
 }

@@ -20,9 +20,7 @@ pub use openai_compatible::{
     tool_spec_to_openai, GrokProvider, OpenAiCompatibleConfig, OpenAiCompatibleProvider,
     OpenAiProvider,
 };
-pub use registry::{
-    register_from_env, AuthKind, ProviderDescriptor, RegisteredProviders,
-};
+pub use registry::{register_from_env, AuthKind, ProviderDescriptor, RegisteredProviders};
 
 /// Workspace smoke: model adapter is loadable.
 #[must_use]

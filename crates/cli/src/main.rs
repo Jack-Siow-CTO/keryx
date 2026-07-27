@@ -147,10 +147,7 @@ async fn run(cli: Cli) -> Result<(), String> {
             .await?;
             println!("{}", serde_json::to_string_pretty(&v).unwrap());
         }
-        Commands::RunEvents {
-            run_id,
-            max_events,
-        } => {
+        Commands::RunEvents { run_id, max_events } => {
             let tok = token.ok_or("KERYX_OPERATOR_TOKEN required")?;
             let resp = client
                 .get(format!("{base}/v1/runs/{run_id}/events"))
@@ -229,10 +226,7 @@ async fn run(cli: Cli) -> Result<(), String> {
             } else if let Ok(v) =
                 authed_json(&client, base, token, "GET", "/v1/providers", None).await
             {
-                println!(
-                    "ok   providers reachable (default={:?})",
-                    v.get("default")
-                );
+                println!("ok   providers reachable (default={:?})", v.get("default"));
             } else {
                 println!("fail providers (auth or network)");
             }

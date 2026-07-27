@@ -4,9 +4,7 @@ use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use http_body_util::BodyExt;
 use keryx_api::{router, AppState, OperatorTokenTable};
-use keryx_app::{
-    ControlPlane, ModelResponse, RunContextConfig, RunLimits, SessionStore, ToolCall,
-};
+use keryx_app::{ControlPlane, ModelResponse, RunContextConfig, RunLimits, SessionStore, ToolCall};
 use keryx_domain::MessageRole;
 use keryx_model::FakeModelProvider;
 use keryx_storage::InMemorySessionStore;
@@ -65,7 +63,11 @@ async fn soul_and_context_attach_to_transcript() {
     let store = Arc::new(InMemorySessionStore::new());
     let tools = Arc::new(WorkspaceFsTools::new(
         vec![ws.clone()],
-        HashSet::from(["read_file".into(), "write_file".into(), "apply_patch".into()]),
+        HashSet::from([
+            "read_file".into(),
+            "write_file".into(),
+            "apply_patch".into(),
+        ]),
     ));
     let control = Arc::new(ControlPlane::with_tools_and_context(
         Arc::clone(&store),
@@ -124,8 +126,9 @@ async fn soul_and_context_attach_to_transcript() {
         .filter(|m| m.role == MessageRole::System)
         .collect();
     assert!(
-        system.iter().any(|m| m.content.contains("[Soul]")
-            && m.content.contains("Keryx Soul")),
+        system
+            .iter()
+            .any(|m| m.content.contains("[Soul]") && m.content.contains("Keryx Soul")),
         "Soul must attach: {system:?}"
     );
     assert!(
@@ -223,7 +226,11 @@ async fn soul_edit_is_high_blast_denied() {
             .await
             .unwrap();
         let body = body_json(list).await;
-        if let Some(id) = body["approvals"].as_array().and_then(|a| a.first()).and_then(|a| a["id"].as_str()) {
+        if let Some(id) = body["approvals"]
+            .as_array()
+            .and_then(|a| a.first())
+            .and_then(|a| a["id"].as_str())
+        {
             let deny = app
                 .clone()
                 .oneshot(
@@ -446,9 +453,10 @@ async fn missing_soul_fails_soft() {
         .await
         .unwrap();
     assert!(
-        transcript.messages.iter().any(|m| {
-            m.role == MessageRole::System && m.content.contains("not loaded")
-        }),
+        transcript
+            .messages
+            .iter()
+            .any(|m| { m.role == MessageRole::System && m.content.contains("not loaded") }),
         "soft missing note expected: {:?}",
         transcript.messages
     );

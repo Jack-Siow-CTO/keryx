@@ -27,10 +27,7 @@ impl SkillDraftStore {
     }
 
     pub fn list(&self) -> Vec<String> {
-        self.drafts
-            .lock()
-            .map(|d| d.clone())
-            .unwrap_or_default()
+        self.drafts.lock().map(|d| d.clone()).unwrap_or_default()
     }
 }
 
@@ -101,12 +98,7 @@ impl SkillsTools {
             .await
             .map_err(|e| ToolError::Failed(e.to_string()))?
         {
-            if entry
-                .file_type()
-                .await
-                .map(|t| t.is_dir())
-                .unwrap_or(false)
-            {
+            if entry.file_type().await.map(|t| t.is_dir()).unwrap_or(false) {
                 names.push(entry.file_name().to_string_lossy().to_string());
             }
         }
@@ -145,10 +137,7 @@ impl SkillsTools {
             .get("name")
             .and_then(Value::as_str)
             .unwrap_or("untitled");
-        let body = args
-            .get("content")
-            .and_then(Value::as_str)
-            .unwrap_or("");
+        let body = args.get("content").and_then(Value::as_str).unwrap_or("");
         let draft = format!("# draft skill {name}\n{body}");
         self.drafts.push(draft.clone());
         // Gateway/reduced: draft only, never auto-apply.
@@ -172,9 +161,7 @@ impl SkillsTools {
             ));
         }
         if !self.auto_apply_trusted {
-            return Err(ToolError::Denied(
-                "skill_manage auto-apply disabled".into(),
-            ));
+            return Err(ToolError::Denied("skill_manage auto-apply disabled".into()));
         }
         let name = args
             .get("name")

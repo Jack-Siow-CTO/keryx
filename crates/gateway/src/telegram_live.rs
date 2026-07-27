@@ -1,8 +1,6 @@
 //! Live Telegram Bot API transport + long-poll loop (not used in default CI).
 
-use crate::{
-    telegram, GatewayError, InboundMessage, OutboundMessage, PlatformTransport,
-};
+use crate::{telegram, GatewayError, InboundMessage, OutboundMessage, PlatformTransport};
 use async_trait::async_trait;
 use keryx_app::ControlPlaneService;
 use keryx_domain::{Principal, RunStatus, SessionId};
@@ -55,15 +53,17 @@ impl TelegramBotApi {
             .await
             .map_err(|e| GatewayError::Other(format!("getMe json: {e}")))?;
         if !status.is_success() || body.get("ok").and_then(Value::as_bool) != Some(true) {
-            return Err(GatewayError::Other(format!(
-                "getMe failed: {body}"
-            )));
+            return Err(GatewayError::Other(format!("getMe failed: {body}")));
         }
         Ok(body["result"].clone())
     }
 
     /// Long-poll `getUpdates`.
-    pub async fn get_updates(&self, offset: i64, timeout_secs: u64) -> Result<Vec<Value>, GatewayError> {
+    pub async fn get_updates(
+        &self,
+        offset: i64,
+        timeout_secs: u64,
+    ) -> Result<Vec<Value>, GatewayError> {
         let resp = self
             .client
             .get(self.method_url("getUpdates"))
@@ -334,15 +334,8 @@ pub async fn run_telegram_long_poll<C: ControlPlaneService + 'static>(
             let principal = principal.clone();
             let sessions = Arc::clone(&sessions);
             tokio::spawn(async move {
-                if let Err(e) = handle_message_e2e(
-                    control,
-                    api,
-                    principal,
-                    sessions,
-                    inbound,
-                    max_wait,
-                )
-                .await
+                if let Err(e) =
+                    handle_message_e2e(control, api, principal, sessions, inbound, max_wait).await
                 {
                     warn!(error = %e, "telegram handle_message_e2e failed");
                 }
@@ -361,7 +354,10 @@ impl TelegramBotApi {
 /// Helper used by unit tests with a custom base URL (mock HTTP).
 #[cfg(test)]
 impl TelegramBotApi {
-    pub fn with_base(token: impl Into<String>, api_base: impl Into<String>) -> Result<Self, GatewayError> {
+    pub fn with_base(
+        token: impl Into<String>,
+        api_base: impl Into<String>,
+    ) -> Result<Self, GatewayError> {
         let mut s = Self::new(token)?;
         s.api_base = api_base.into();
         Ok(s)

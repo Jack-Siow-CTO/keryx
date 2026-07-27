@@ -26,7 +26,11 @@ async fn body_json(response: axum::response::Response) -> Value {
     serde_json::from_slice(&bytes).expect("json body")
 }
 
-fn harness() -> (axum::Router, Arc<InMemorySessionStore>, Arc<ControlPlane<InMemorySessionStore, FakeModelProvider>>) {
+fn harness() -> (
+    axum::Router,
+    Arc<InMemorySessionStore>,
+    Arc<ControlPlane<InMemorySessionStore, FakeModelProvider>>,
+) {
     let store = Arc::new(InMemorySessionStore::new());
     let model = Arc::new(FakeModelProvider::with_fixed_content("schedule fire ok"));
     let control = Arc::new(ControlPlane::new(Arc::clone(&store), model));
@@ -104,7 +108,10 @@ async fn schedule_crud_pause_resume_delete() {
         .await
         .unwrap();
     assert_eq!(list.status(), StatusCode::OK);
-    assert_eq!(body_json(list).await["schedules"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        body_json(list).await["schedules"].as_array().unwrap().len(),
+        1
+    );
 
     let del = app
         .clone()
@@ -128,13 +135,7 @@ async fn tick_fires_run_with_origin_schedule_reduced_policy() {
         id: keryx_domain::PrincipalId::new(PRINCIPAL),
     };
     let schedule = control
-        .create_schedule(
-            principal,
-            "do work".into(),
-            60,
-            1_000,
-            None,
-        )
+        .create_schedule(principal, "do work".into(), 60, 1_000, None)
         .await
         .unwrap();
     assert!(Policy::for_origin(&RunOrigin::Schedule).allows_tool("read_file"));
@@ -247,7 +248,9 @@ async fn unauthenticated_schedule_fail_closed() {
                 .method("POST")
                 .uri("/v1/schedules")
                 .header("content-type", "application/json")
-                .body(Body::from(json!({"goal":"x","interval_secs":1}).to_string()))
+                .body(Body::from(
+                    json!({"goal":"x","interval_secs":1}).to_string(),
+                ))
                 .unwrap(),
         )
         .await
