@@ -9,7 +9,7 @@ mod state;
 
 pub use auth::OperatorTokenTable;
 pub use routes::router;
-pub use state::AppState;
+pub use state::{AppState, ProviderCatalog, ProviderInfo};
 
 /// Workspace smoke: API adapter is loadable.
 #[must_use]

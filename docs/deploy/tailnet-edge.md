@@ -45,7 +45,7 @@ Secrets load from the environment or secret **files** (never commit keys).
 | `KERYX_GLOBAL_ACTIVE_CAP` | no | Max concurrent Active Runs across Sessions (default `2`) |
 | `KERYX_WORKSPACE_ROOTS` | no | Colon-separated Workspace roots for file tools |
 | `KERYX_ALLOWED_TOOLS` | no | Comma-separated tool allowlist (default `read_file,write_file`) |
-| `KERYX_DEFAULT_PROVIDER` | no | `fake` \| `openai` \| `grok` (default `fake`) |
+| `KERYX_DEFAULT_PROVIDER` | when multiple | `openai` \| `grok` \| `openai_codex` \| … (no fake) |
 | `OPENAI_API_KEY` / `OPENAI_API_KEY_FILE` | for OpenAI | API credentials |
 | `OPENAI_MODEL` | no | Default model id |
 | `OPENAI_BASE_URL` | no | Override base URL (tests/fixtures) |
@@ -61,7 +61,7 @@ export KERYX_OPERATOR_TOKEN="$(cat /run/secrets/keryx-operator-token)"
 export KERYX_DATA_DIR=/var/lib/keryx
 export KERYX_BIND=127.0.0.1:8787
 export KERYX_WORKSPACE_ROOTS=/var/lib/keryx/workspace
-export KERYX_DEFAULT_PROVIDER=fake   # or openai / grok when keys present
+export KERYX_DEFAULT_PROVIDER=openai   # or grok / openai_codex when secrets present
 # optional:
 # export OPENAI_API_KEY_FILE=/run/secrets/openai-api-key
 # export XAI_API_KEY_FILE=/run/secrets/xai-api-key
@@ -119,7 +119,7 @@ export TOKEN=... # same as KERYX_OPERATOR_TOKEN
 curl -sS -X POST "$KERYX_URL/v1/sessions" \
   -H "authorization: Bearer $TOKEN"
 
-# Start Run (fake provider default, or "provider":"openai"|"grok")
+# Start Run ("provider":"openai"|"grok"|"openai_codex"|…, optional "model")
 curl -sS -X POST "$KERYX_URL/v1/sessions/<SESSION_ID>/runs" \
   -H "authorization: Bearer $TOKEN" \
   -H "content-type: application/json" \

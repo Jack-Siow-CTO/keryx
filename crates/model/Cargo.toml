@@ -1,6 +1,6 @@
 [package]
 name = "keryx-model"
-description = "Keryx model provider adapters (OpenAI, Grok/xAI) and fakes for tests"
+description = "Keryx model provider adapters (OpenAI, Grok/xAI, Codex, consumer web) and test helpers"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

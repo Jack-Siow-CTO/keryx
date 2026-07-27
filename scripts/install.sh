@@ -83,7 +83,11 @@ if [[ ! -f "${ENV_FILE}" ]]; then
 KERYX_OPERATOR_TOKEN=change-me-generate-a-long-random-token
 KERYX_BIND=127.0.0.1:8787
 KERYX_DATA_DIR=./data
-KERYX_DEFAULT_PROVIDER=fake
+# Configure at least one real model provider (no runtime fake):
+# OPENAI_API_KEY=...
+# or: CHATGPT_WEB_ACCESS_TOKEN_FILE=...  (openai_codex after codex login + sync)
+# or: XAI_API_KEY=... / GROK_WEB_COOKIE_FILE=...
+# KERYX_DEFAULT_PROVIDER=openai_codex
 EOF
   fi
   chmod 600 "${ENV_FILE}"
@@ -172,7 +176,7 @@ info "done."
 echo
 echo "Next steps:"
 echo "  1) Review config:  ${ENV_FILE}"
-echo "  2) Optional real models: set OPENAI_API_KEY / XAI_API_KEY and KERYX_DEFAULT_PROVIDER"
+echo "  2) Configure a real model provider (required): OPENAI_API_KEY, Codex token, XAI_API_KEY, or GROK_WEB_COOKIE — see .env.example"
 if [[ "${MODE}" == "user" ]]; then
   echo "  3) Start:          set -a && source ${ENV_FILE} && set +a && ${BIN_DIR}/keryx"
   echo "     Doctor:         set -a && source ${ENV_FILE} && set +a && ${BIN_DIR}/keryx doctor"

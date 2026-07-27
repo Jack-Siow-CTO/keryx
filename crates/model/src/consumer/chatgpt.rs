@@ -47,17 +47,18 @@ impl ChatGptWebProvider {
                 .unwrap_or_else(|_| "https://chatgpt.com".into()),
             path: std::env::var("CHATGPT_WEB_PATH")
                 .unwrap_or_else(|_| "/backend-api/conversation".into()),
-            model: std::env::var("CHATGPT_WEB_MODEL").unwrap_or_else(|_| "auto".into()),
+            model: std::env::var("CHATGPT_WEB_MODEL").unwrap_or_else(|_| "gpt-5.6-sol".into()),
             auth,
             user_agent: std::env::var("CHATGPT_WEB_USER_AGENT").unwrap_or_else(|_| {
                 "Mozilla/5.0 (compatible; KeryxWorker/0.1; +https://github.com/Jack-Siow-CTO/keryx)"
                     .into()
             }),
+            allowed_models: Vec::new(),
         };
         Self::new(config).map(Some).map_err(|e| e.to_string())
     }
 
-    fn build_body(&self, request: &ModelRequest) -> Value {
+    fn build_body(&self, request: &ModelRequest, model: &str) -> Value {
         let mut messages = Vec::new();
         for msg in &request.transcript {
             let role = match msg.role {
@@ -86,7 +87,7 @@ impl ChatGptWebProvider {
         json!({
             "action": "next",
             "messages": messages,
-            "model": self.config.model,
+            "model": model,
             "parent_message_id": Uuid::new_v4().to_string(),
         })
     }
@@ -95,6 +96,10 @@ impl ChatGptWebProvider {
 #[async_trait]
 impl ModelProvider for ChatGptWebProvider {
     async fn complete(&self, request: ModelRequest) -> Result<ModelResponse, ModelError> {
+        let model = self
+            .config
+            .resolve_model(request.model.as_deref())
+            .map_err(ModelError::new)?;
         let secrets = self.config.auth.secret_values();
         let url = self.config.chat_url();
         let mut builder = self
@@ -102,7 +107,7 @@ impl ModelProvider for ChatGptWebProvider {
             .post(&url)
             .header("content-type", "application/json")
             .header("accept", "text/event-stream")
-            .json(&self.build_body(&request));
+            .json(&self.build_body(&request, &model));
 
         if let Some(token) = &self.config.auth.bearer_token {
             builder = builder.header("authorization", format!("Bearer {token}"));

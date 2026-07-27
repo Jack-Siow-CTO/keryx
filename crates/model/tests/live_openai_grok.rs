@@ -46,7 +46,7 @@ async fn live_openai_completion() {
         eprintln!("skip: OPENAI_API_KEY not set");
         return;
     };
-    let model = env::var("OPENAI_MODEL").unwrap_or_else(|_| "gpt-4o-mini".into());
+    let model = env::var("OPENAI_MODEL").unwrap_or_else(|_| "gpt-5.6-sol".into());
     let mut cfg = OpenAiCompatibleConfig::openai(api_key, model);
     if let Ok(base) = env::var("OPENAI_BASE_URL") {
         cfg = cfg.with_base_url(base);
@@ -57,6 +57,7 @@ async fn live_openai_completion() {
             goal: "Reply with exactly the word pong.".into(),
             transcript: vec![],
             provider: Some("openai".into()),
+            model: None,
         })
         .await
         .expect("live openai completion");
@@ -78,7 +79,7 @@ async fn live_grok_completion() {
         eprintln!("skip: XAI_API_KEY not set");
         return;
     };
-    let model = env::var("XAI_MODEL").unwrap_or_else(|_| "grok-3".into());
+    let model = env::var("XAI_MODEL").unwrap_or_else(|_| "grok-4.5".into());
     let mut cfg = OpenAiCompatibleConfig::grok(api_key, model);
     if let Ok(base) = env::var("XAI_BASE_URL") {
         cfg = cfg.with_base_url(base);
@@ -89,6 +90,7 @@ async fn live_grok_completion() {
             goal: "Reply with exactly the word pong.".into(),
             transcript: vec![],
             provider: Some("grok".into()),
+            model: None,
         })
         .await
         .expect("live grok completion");

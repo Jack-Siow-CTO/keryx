@@ -30,11 +30,13 @@ export KERYX_URL=http://127.0.0.1:8787
 ./scripts/smoke.sh
 ```
 
-Use a **real model** (recommended path):
+Configure **at least one real model provider** (there is no runtime fake):
 
-1. Put `OPENAI_API_KEY` and/or `XAI_API_KEY` in `~/.config/keryx/env`
-2. Set `KERYX_DEFAULT_PROVIDER=openai` or `grok`
-3. Restart `keryx` and re-run `./scripts/smoke.sh` (optionally `KERYX_SMOKE_PROVIDER=openai`)
+1. Official APIs: `OPENAI_API_KEY` and/or `XAI_API_KEY` in `~/.config/keryx/env`
+2. Or ChatGPT subscription: `codex login` → `./scripts/sync-chatgpt-codex-auth.sh` → point `CHATGPT_WEB_ACCESS_TOKEN_FILE` at the synced file (`openai_codex`)
+3. Or Grok web session: `GROK_WEB_COOKIE_FILE` (`grok_web`)
+4. Set `KERYX_DEFAULT_PROVIDER` when more than one is registered
+5. Restart `keryx` and re-run `./scripts/smoke.sh` (e.g. `KERYX_SMOKE_PROVIDER=openai_codex`)
 
 Full install options: [docs/deploy/install.md](docs/deploy/install.md).  
 Ready-to-use ladder: [docs/deploy/operator-checklist.md](docs/deploy/operator-checklist.md).
@@ -78,8 +80,10 @@ Copy of the template lives at [`.env.example`](.env.example). Install places it 
 | `KERYX_OPERATOR_TOKEN` | Required bearer token for `/v1/*` |
 | `KERYX_BIND` | Default `127.0.0.1:8787` (loopback only) |
 | `KERYX_DATA_DIR` | SQLite directory |
-| `KERYX_DEFAULT_PROVIDER` | `fake` \| `openai` \| `grok` (plus optional web providers) |
+| `KERYX_DEFAULT_PROVIDER` | `openai` \| `grok` \| `openai_codex` \| `openai_web` \| `grok_web` |
 | `OPENAI_API_KEY` / `XAI_API_KEY` | Official model credentials |
+| `CHATGPT_WEB_ACCESS_TOKEN_FILE` | Codex / ChatGPT subscription OAuth token |
+| `GROK_WEB_COOKIE_FILE` | Grok web session cookie |
 | `KERYX_WORKSPACE_ROOTS` | Colon-separated file-tool roots |
 
 Prefer `*_FILE` secret paths in production. Never commit tokens or keys.
@@ -113,7 +117,11 @@ curl -sS -X POST "$KERYX_URL/v1/sessions" \
 curl -sS -X POST "$KERYX_URL/v1/sessions/<SESSION_ID>/runs" \
   -H "authorization: Bearer $TOKEN" \
   -H "content-type: application/json" \
-  -d '{"goal":"summarize my notes","provider":"openai"}'
+  -d '{"goal":"summarize my notes","provider":"openai","model":"gpt-5.6-sol"}'
+
+# list registered providers + default models
+curl -sS "$KERYX_URL/v1/providers" \
+  -H "authorization: Bearer $TOKEN"
 
 curl -sSN "$KERYX_URL/v1/runs/<RUN_ID>/events" \
   -H "authorization: Bearer $TOKEN" \
@@ -127,18 +135,28 @@ Or: `./scripts/smoke.sh`.
 
 ## Models
 
-**Recommended:** official APIs — OpenAI and Grok (xAI) via API keys.
+| Provider | Auth | Notes |
+|----------|------|-------|
+| `openai` | Platform API key | Official Chat Completions |
+| `grok` | xAI API key | Official OpenAI-compatible |
+| `openai_codex` | Codex OAuth (`codex login`) | ChatGPT Plus/Pro subscription wire |
+| `openai_web` | Browser cookie (+ optional token) | Unofficial; cookie required to register |
+| `grok_web` | Browser cookie | Unofficial Grok web session |
+
+There is **no** runtime `fake` provider. Boot fails closed if no real secrets are configured.
 
 ```bash
-# ~/.config/keryx/env
+# ~/.config/keryx/env — pick one or more
 OPENAI_API_KEY=sk-...
-# XAI_API_KEY=xai-...
-KERYX_DEFAULT_PROVIDER=openai
+# or after: codex login && ./scripts/sync-chatgpt-codex-auth.sh
+CHATGPT_WEB_ACCESS_TOKEN_FILE=$HOME/.config/keryx/chatgpt-access-token
+KERYX_DEFAULT_PROVIDER=openai_codex
 ```
 
-Opt-in live adapter tests: [docs/deploy/live-model-verification.md](docs/deploy/live-model-verification.md).
-
-**Advanced / unofficial:** consumer ChatGPT or Grok *browser session* material — may break and may violate vendor ToS. See [docs/deploy/consumer-web-sessions.md](docs/deploy/consumer-web-sessions.md). Prefer API keys.
+Per-run model: `{"goal":"…","provider":"openai_codex","model":"gpt-5.6-sol"}`.  
+Catalog: `GET /v1/providers`.  
+Live tests: [docs/deploy/live-model-verification.md](docs/deploy/live-model-verification.md).  
+Consumer/Codex detail: [docs/deploy/consumer-web-sessions.md](docs/deploy/consumer-web-sessions.md).
 
 ## Secure remote access (optional)
 
@@ -159,8 +177,8 @@ Guide: [docs/deploy/tailnet-edge.md](docs/deploy/tailnet-edge.md).
 | Level | What |
 |-------|------|
 | 1 | `cargo test --workspace` |
-| 2 | install + `fake` + `./scripts/smoke.sh` |
-| 3 | real OpenAI/Grok Run |
+| 2 | install + real provider + `./scripts/smoke.sh` |
+| 3 | Codex sub / OpenAI / Grok paths |
 | 4 | systemd always-on |
 | 5 | Tailnet edge |
 

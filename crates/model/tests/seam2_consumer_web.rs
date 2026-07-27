@@ -50,6 +50,7 @@ async fn openai_web_sends_bearer_and_cookie_and_parses_sse() {
             extra_headers: Default::default(),
         },
         user_agent: "keryx-test".into(),
+        allowed_models: Vec::new(),
     })
     .unwrap();
 
@@ -58,6 +59,7 @@ async fn openai_web_sends_bearer_and_cookie_and_parses_sse() {
             goal: "hi".into(),
             transcript: vec![],
             provider: Some("openai_web".into()),
+            model: None,
         })
         .await
         .unwrap();
@@ -93,6 +95,7 @@ async fn openai_web_maps_401_without_echoing_secrets() {
             extra_headers: Default::default(),
         },
         user_agent: "keryx-test".into(),
+        allowed_models: Vec::new(),
     })
     .unwrap();
 
@@ -101,6 +104,7 @@ async fn openai_web_maps_401_without_echoing_secrets() {
             goal: "x".into(),
             transcript: vec![],
             provider: None,
+            model: None,
         })
         .await
         .unwrap_err();
@@ -138,6 +142,7 @@ async fn grok_web_sends_cookie_and_extra_headers() {
             extra_headers: extra,
         },
         user_agent: "keryx-test".into(),
+        allowed_models: Vec::new(),
     })
     .unwrap();
 
@@ -146,6 +151,7 @@ async fn grok_web_sends_cookie_and_extra_headers() {
             goal: "ping".into(),
             transcript: vec![],
             provider: Some("grok_web".into()),
+            model: None,
         })
         .await
         .unwrap();
@@ -195,6 +201,7 @@ data: {\"type\":\"response.completed\"}\n\n";
                 extra_headers: extra,
             },
             user_agent: "keryx-test".into(),
+        allowed_models: Vec::new(),
         },
         Some("low".into()),
     )
@@ -205,6 +212,7 @@ data: {\"type\":\"response.completed\"}\n\n";
             goal: "ping".into(),
             transcript: vec![],
             provider: Some("openai_codex".into()),
+            model: None,
         })
         .await
         .unwrap();
@@ -217,6 +225,54 @@ data: {\"type\":\"response.completed\"}\n\n";
     assert_eq!(body["store"], false);
     assert_eq!(body["reasoning"]["effort"], "low");
     assert_eq!(body["input"][0]["role"], "user");
+}
+
+#[tokio::test]
+async fn grok_web_defaults_include_reasoning_medium_when_set() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/rest/app-chat/conversations/new"))
+        .and(header("cookie", "sso=1"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "text/event-stream")
+                .set_body_string(grok_sse()),
+        )
+        .mount(&server)
+        .await;
+
+    let provider = GrokWebProvider::new_with_reasoning(
+        ConsumerWebConfig {
+            provider_name: "grok_web".into(),
+            base_url: server.uri(),
+            path: "/rest/app-chat/conversations/new".into(),
+            model: "grok-4.5".into(),
+            auth: ConsumerWebAuth {
+                cookie_header: Some("sso=1".into()),
+                bearer_token: None,
+                extra_headers: Default::default(),
+            },
+            user_agent: "keryx-test".into(),
+            allowed_models: Vec::new(),
+        },
+        Some("medium".into()),
+    )
+    .unwrap();
+
+    provider
+        .complete(ModelRequest {
+            goal: "ping".into(),
+            transcript: vec![],
+            provider: Some("grok_web".into()),
+            model: None,
+        })
+        .await
+        .unwrap();
+
+    let body: serde_json::Value =
+        serde_json::from_slice(&server.received_requests().await.unwrap()[0].body).unwrap();
+    assert_eq!(body["model"], "grok-4.5");
+    assert_eq!(body["reasoningEffort"], "medium");
 }
 
 #[tokio::test]
@@ -241,6 +297,7 @@ async fn grok_web_json_fallback() {
             extra_headers: Default::default(),
         },
         user_agent: "keryx-test".into(),
+        allowed_models: Vec::new(),
     })
     .unwrap();
 
@@ -249,6 +306,7 @@ async fn grok_web_json_fallback() {
             goal: "q".into(),
             transcript: vec![],
             provider: None,
+            model: None,
         })
         .await
         .unwrap();

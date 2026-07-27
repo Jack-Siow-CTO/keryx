@@ -4,15 +4,12 @@ mod config;
 
 use clap::{Parser, Subcommand};
 use config::WorkerConfig;
-use keryx_api::{router, AppState, OperatorTokenTable};
+use keryx_api::{router, AppState, OperatorTokenTable, ProviderCatalog, ProviderInfo};
 use keryx_app::{ControlPlane, DenyAllTools, SessionStore};
-use keryx_model::{
-    ChatGptCodexProvider, ChatGptWebProvider, FakeModelProvider, GrokWebProvider,
-    MultiModelProvider, OpenAiCompatibleConfig, OpenAiCompatibleProvider,
-};
+use keryx_model::{register_from_env, RegisteredProviders};
 use keryx_storage::SqliteSessionStore;
 use keryx_tools::WorkspaceFsTools;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::net::SocketAddr;
 use std::path::Path;
 use std::sync::Arc;
@@ -73,19 +70,20 @@ fn init_tracing() {
 
 async fn run() -> Result<(), String> {
     let config = WorkerConfig::from_env()?;
+    let registered = register_from_env()?;
     info!(
         bind = %config.bind,
         data_dir = %config.data_dir.display(),
-        default_provider = %config.default_provider,
+        default_provider = %registered.default_provider,
+        providers = ?registered.provider_names(),
         "starting keryx worker"
     );
 
     let store = Arc::new(SqliteSessionStore::open(&config.data_dir)?);
-    let model = build_model_provider(&config)?;
     let tools = build_tools(&config);
     let control = Arc::new(ControlPlane::with_tools(
         Arc::clone(&store),
-        model,
+        Arc::clone(&registered.multi),
         config.run_limits(),
         tools,
     ));
@@ -94,7 +92,8 @@ async fn run() -> Result<(), String> {
     for (token, principal) in &config.operator_tokens {
         tokens = tokens.with_token(token, principal.as_str());
     }
-    let state = AppState::new(control, tokens);
+    let catalog = catalog_from_registered(&registered);
+    let state = AppState::with_providers(control, tokens, catalog);
     let app = router(state);
 
     let listener = TcpListener::bind(config.bind)
@@ -119,6 +118,25 @@ async fn run() -> Result<(), String> {
 
     info!("keryx worker stopped");
     Ok(())
+}
+
+fn catalog_from_registered(registered: &RegisteredProviders) -> ProviderCatalog {
+    ProviderCatalog {
+        default: Some(registered.default_provider.clone()),
+        providers: registered
+            .descriptors
+            .iter()
+            .map(|d| ProviderInfo {
+                name: d.name.clone(),
+                auth_kind: d.auth_kind.as_str().to_string(),
+                display_name: d.display_name.clone(),
+                default_model: d.default_model.clone(),
+                models: d.models.clone(),
+                registered: d.registered,
+                supports_model_override: d.supports_model_override,
+            })
+            .collect(),
+    }
 }
 
 fn doctor() -> Result<(), String> {
@@ -162,46 +180,28 @@ fn doctor() -> Result<(), String> {
         }
     }
 
-    // Providers that would register
-    let mut available = vec!["fake".to_string()];
-    if config.openai.is_some() {
-        available.push("openai".into());
-    }
-    if config.grok.is_some() {
-        available.push("grok".into());
-    }
-    if config.openai_web.is_some() {
-        available.push("openai_web".into());
-    }
-    if std::env::var("CHATGPT_WEB_ACCESS_TOKEN").is_ok()
-        || std::env::var("CHATGPT_WEB_ACCESS_TOKEN_FILE").is_ok()
-    {
-        // openai_codex registers from env when the Codex/ChatGPT access token is present
-        available.push("openai_codex".into());
-    }
-    if config.grok_web.is_some() {
-        available.push("grok_web".into());
-    }
-    println!("ok   providers available: {available:?}");
-
-    if available.iter().any(|p| p == &config.default_provider) {
-        println!(
-            "ok   default provider '{}' is registered",
-            config.default_provider
-        );
-    } else {
-        println!(
-            "fail default provider '{}' is not available (have {available:?})",
-            config.default_provider
-        );
-        issues += 1;
-    }
-
-    if config.default_provider == "fake" {
-        println!(
-            "warn default provider is 'fake' — set OPENAI_API_KEY / XAI_API_KEY for real models"
-        );
-        warn_count += 1;
+    // Real model providers only (registry)
+    match register_from_env() {
+        Ok(registered) => {
+            println!(
+                "ok   providers registered: {:?} (default={})",
+                registered.provider_names(),
+                registered.default_provider
+            );
+            for d in &registered.descriptors {
+                println!(
+                    "     - {} [{}] model={} auth={}",
+                    d.name,
+                    d.display_name,
+                    d.default_model,
+                    d.auth_kind.as_str()
+                );
+            }
+        }
+        Err(e) => {
+            println!("fail model providers: {e}");
+            issues += 1;
+        }
     }
 
     // Tools
@@ -243,7 +243,6 @@ fn ensure_data_dir_writable(dir: &Path) -> Result<(), String> {
 
 fn probe_health(url: &str) -> Result<String, String> {
     // Tiny blocking probe so doctor stays sync and dependency-light.
-    // Use std::process curl when available; otherwise skip with a clear message.
     let output = std::process::Command::new("curl")
         .args(["-fsS", "--max-time", "2", url])
         .output()
@@ -252,64 +251,6 @@ fn probe_health(url: &str) -> Result<String, String> {
         return Err("connection failed".into());
     }
     String::from_utf8(output.stdout).map_err(|e| e.to_string())
-}
-
-fn build_model_provider(config: &WorkerConfig) -> Result<Arc<MultiModelProvider>, String> {
-    let mut providers: HashMap<String, Arc<dyn keryx_app::ModelProvider>> = HashMap::new();
-    providers.insert("fake".into(), Arc::new(FakeModelProvider::greeting()));
-
-    if let Some(openai) = &config.openai {
-        let mut cfg = OpenAiCompatibleConfig::openai(&openai.api_key, &openai.model);
-        if let Some(base) = &openai.base_url {
-            cfg = cfg.with_base_url(base);
-        }
-        let provider = OpenAiCompatibleProvider::new(cfg).map_err(|e| e.to_string())?;
-        providers.insert("openai".into(), Arc::new(provider));
-    }
-
-    if let Some(grok) = &config.grok {
-        let mut cfg = OpenAiCompatibleConfig::grok(&grok.api_key, &grok.model);
-        if let Some(base) = &grok.base_url {
-            cfg = cfg.with_base_url(base);
-        }
-        let provider = OpenAiCompatibleProvider::new(cfg).map_err(|e| e.to_string())?;
-        providers.insert("grok".into(), Arc::new(provider));
-    }
-
-    if let Some(web) = &config.openai_web {
-        let provider = ChatGptWebProvider::new(web.clone()).map_err(|e| e.to_string())?;
-        providers.insert("openai_web".into(), Arc::new(provider));
-        info!("registered model provider openai_web (consumer session)");
-    }
-
-    // ChatGPT Plus/Pro subscription via Codex OAuth (not Platform API key).
-    match ChatGptCodexProvider::from_env() {
-        Ok(Some(provider)) => {
-            providers.insert("openai_codex".into(), Arc::new(provider));
-            info!("registered model provider openai_codex (ChatGPT subscription)");
-        }
-        Ok(None) => {}
-        Err(e) => return Err(format!("openai_codex config: {e}")),
-    }
-
-    if let Some(web) = &config.grok_web {
-        let provider = GrokWebProvider::new(web.clone()).map_err(|e| e.to_string())?;
-        providers.insert("grok_web".into(), Arc::new(provider));
-        info!("registered model provider grok_web (consumer session)");
-    }
-
-    if !providers.contains_key(&config.default_provider) {
-        return Err(format!(
-            "KERYX_DEFAULT_PROVIDER='{}' is not available (configured: {:?})",
-            config.default_provider,
-            providers.keys().collect::<Vec<_>>()
-        ));
-    }
-
-    Ok(Arc::new(MultiModelProvider::new(
-        config.default_provider.clone(),
-        providers,
-    )))
 }
 
 fn build_tools(config: &WorkerConfig) -> Arc<dyn keryx_app::ToolRuntime> {

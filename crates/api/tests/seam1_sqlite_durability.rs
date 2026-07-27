@@ -145,6 +145,7 @@ async fn active_run_becomes_interrupted_on_reopen_no_mid_loop_resume() {
             session.id,
             "continue after interrupt".into(),
             None,
+            None,
         )
         .await
         .unwrap();

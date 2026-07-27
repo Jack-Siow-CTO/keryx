@@ -50,6 +50,28 @@ pub struct ConsumerWebConfig {
     pub model: String,
     pub auth: ConsumerWebAuth,
     pub user_agent: String,
+    /// When non-empty, only these model ids are accepted (per-run override included).
+    pub allowed_models: Vec<String>,
+}
+
+impl ConsumerWebConfig {
+    /// Resolve the model id for a request: override → config default, with optional allowlist.
+    pub fn resolve_model(&self, override_model: Option<&str>) -> Result<String, String> {
+        let model = override_model
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .unwrap_or(self.model.as_str())
+            .to_string();
+        if !self.allowed_models.is_empty()
+            && !self.allowed_models.iter().any(|m| m == &model)
+        {
+            return Err(format!(
+                "{}: model '{model}' not in allowlist {:?}",
+                self.provider_name, self.allowed_models
+            ));
+        }
+        Ok(model)
+    }
 }
 
 impl ConsumerWebConfig {

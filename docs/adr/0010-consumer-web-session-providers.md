@@ -18,7 +18,7 @@ Operators sometimes hold consumer subscriptions without (or instead of) API keys
 - Using consumer sites this way may violate vendor Terms of Service; the **operator owns that risk**.
 - Sessions expire; missing/invalid session → clear `ModelError` / failed Run with **no secret echo**.
 - Never store session secrets in SQLite, Transcript, SSE, or logs.
-- Register web providers only when secrets are present; do not auto-select them over `fake`/API keys.
+- Register web providers only when secrets are present; do not auto-select them over official API keys. Runtime `fake` is not a product provider (see ADR 0011).
 - Default CI and Seam 2 fixtures must not require live consumer network.
 
 ## Alternatives considered

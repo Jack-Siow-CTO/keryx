@@ -55,7 +55,9 @@ chmod 600 ~/.config/keryx/env
 export KERYX_OPERATOR_TOKEN="$(openssl rand -hex 32)"
 export KERYX_DATA_DIR=./data
 export KERYX_BIND=127.0.0.1:8787
-export KERYX_DEFAULT_PROVIDER=fake
+# Required: at least one real model provider (no runtime fake)
+export OPENAI_API_KEY=sk-...   # or Codex token / XAI / GROK_WEB_COOKIE — see .env.example
+export KERYX_DEFAULT_PROVIDER=openai
 cargo run -p keryx-worker --release
 ```
 
@@ -81,8 +83,10 @@ Edit the env file (user: `~/.config/keryx/env`). Full template: [../../.env.exam
 | `KERYX_OPERATOR_TOKEN` or `*_FILE` | yes | Bearer for `/v1/*` |
 | `KERYX_BIND` | no | Default `127.0.0.1:8787`; must be loopback |
 | `KERYX_DATA_DIR` | no | SQLite directory |
-| `KERYX_DEFAULT_PROVIDER` | no | `fake` until keys exist |
-| `OPENAI_API_KEY` / `XAI_API_KEY` | for real models | Official APIs |
+| `KERYX_DEFAULT_PROVIDER` | when multiple | `openai` \| `grok` \| `openai_codex` \| `openai_web` \| `grok_web` |
+| `OPENAI_API_KEY` / `XAI_API_KEY` | for official APIs | Platform / xAI keys |
+| `CHATGPT_WEB_ACCESS_TOKEN_FILE` | for Codex sub | After `codex login` + sync script |
+| `GROK_WEB_COOKIE_FILE` | for Grok web | Browser session cookie |
 | `KERYX_WORKSPACE_ROOTS` | for file tools | Colon-separated paths |
 
 Load env into a shell before running the binary:

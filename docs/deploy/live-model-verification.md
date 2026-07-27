@@ -1,81 +1,71 @@
-# Opt-in live OpenAI and Grok verification
+# Opt-in live model verification (local)
 
 Live Model provider calls are **never** part of default CI (ADR 0009).
-This document describes the explicit opt-in path for operators and developers
-who want to exercise real OpenAI and Grok credentials.
+This document is the local operator matrix for real credentials.
 
-## Mechanism
+## Gate
 
 | Gate | How |
 |------|-----|
-| Default CI / `cargo test` | Fixture and Seam 1/2 only—no live network to OpenAI/xAI |
-| Live verification | Env flag `KERYX_LIVE_MODELS=1` **and** real API keys present |
+| Default CI / `cargo test` | Fixture Seam 1/2 only — no live network |
+| Live verification | `KERYX_LIVE_MODELS=1` **and** real secrets present |
 
-Ignored tests (or manual scripts) must skip cleanly when the flag or keys are
-absent so merge gates never fail for missing credentials.
+## Matrix
 
-## Environment
+| Provider | Secrets | Test |
+|----------|---------|------|
+| `openai` | `OPENAI_API_KEY` | `live_openai_grok` |
+| `grok` | `XAI_API_KEY` | `live_openai_grok` |
+| `openai_codex` | Codex access token (sync script) | `live_consumer_web` (`live_openai_codex_completion`) |
+| `openai_web` | cookie / force + token | `live_consumer_web` |
+| `grok_web` | `GROK_WEB_COOKIE` | `live_consumer_web` |
 
-```bash
-export KERYX_LIVE_MODELS=1
-
-# OpenAI
-export OPENAI_API_KEY=sk-...          # or OPENAI_API_KEY_FILE=/path
-export OPENAI_MODEL=gpt-4o-mini       # optional
-
-# Grok (xAI)
-export XAI_API_KEY=xai-...            # or XAI_API_KEY_FILE=/path
-export XAI_MODEL=grok-3               # optional
-```
-
-## Run live tests
-
-```bash
-# From repo root; only runs live tests when opt-in is set.
-KERYX_LIVE_MODELS=1 cargo test -p keryx-model --test live_openai_grok -- --ignored --nocapture
-```
-
-Without `KERYX_LIVE_MODELS=1`, the live test file is skipped / ignored and
-`cargo test` remains green.
-
-## What live path exercises
-
-1. One **OpenAI** completion via the shared OpenAI-compatible client
-2. One **Grok (xAI)** completion via the same client shape with xAI base URL
-
-### Consumer web sessions (separate file)
-
-Operator-supplied browser session material (ADR 0010):
+## Official APIs
 
 ```bash
 export KERYX_LIVE_MODELS=1
-# CHATGPT_WEB_ACCESS_TOKEN / CHATGPT_WEB_COOKIE and/or GROK_WEB_COOKIE
+export OPENAI_API_KEY=sk-...          # or OPENAI_API_KEY_FILE
+export OPENAI_MODEL=gpt-5.6-sol       # default if unset
+export OPENAI_REASONING_EFFORT=low    # default if unset
+export XAI_API_KEY=xai-...
+export XAI_MODEL=grok-4.5             # default if unset
+export XAI_REASONING_EFFORT=medium    # default if unset
+
+cargo test -p keryx-model --test live_openai_grok -- --ignored --nocapture
+```
+
+## Codex subscription + consumer web
+
+```bash
+export KERYX_LIVE_MODELS=1
+# after: codex login && ./scripts/sync-chatgpt-codex-auth.sh
+export CHATGPT_WEB_ACCESS_TOKEN_FILE=$HOME/.config/keryx/chatgpt-access-token
+export CHATGPT_ACCOUNT_ID_FILE=$HOME/.config/keryx/chatgpt-account-id
+# optional GROK_WEB_COOKIE_FILE=...
+
 cargo test -p keryx-model --test live_consumer_web -- --ignored --nocapture
 ```
 
-See `docs/deploy/consumer-web-sessions.md`.
-
-Failures here are **operator/credentials/provider** issues—not Seam 1 control-plane
-or Seam 2 fixture regressions. Keep them separate from merge gates.
-
-## Operator Worker path (optional)
-
-With keys configured on the Worker host:
+## Worker path (local)
 
 ```bash
-export KERYX_DEFAULT_PROVIDER=openai   # or grok
-export OPENAI_API_KEY_FILE=/run/secrets/openai-api-key
-# ...
+set -a && source ~/.config/keryx/env && set +a
+keryx doctor
 keryx
-```
+# other terminal:
+export KERYX_OPERATOR_TOKEN=...
+export KERYX_SMOKE_PROVIDER=openai_codex   # or openai / grok_web / …
+# export KERYX_SMOKE_MODEL=gpt-5.6-sol
+./scripts/smoke.sh
 
-Start a Run with `"provider":"openai"` or `"provider":"grok"` over the control plane.
+curl -sS -H "authorization: Bearer $KERYX_OPERATOR_TOKEN" \
+  http://127.0.0.1:8787/v1/providers
+```
 
 ## Separation from CI
 
-| Layer | Command / gate | Live models? |
-|-------|----------------|--------------|
-| L1–L3 Seam 1 / unit | `cargo test` | No |
-| Seam 2 fixtures | `cargo test -p keryx-model` | No (wiremock) |
-| L4 smoke | worker smoke tests | Fake model only |
-| L5 live | `KERYX_LIVE_MODELS=1` + ignored tests | Yes, opt-in only |
+| Layer | Live models? |
+|-------|--------------|
+| L1–L3 Seam 1 / unit / Seam 2 fixtures | No |
+| L4 smoke (in-process test double) | No network |
+| L5 live | Opt-in only |

@@ -6,6 +6,7 @@ set -euo pipefail
 KERYX_URL="${KERYX_URL:-http://127.0.0.1:8787}"
 TOKEN="${KERYX_OPERATOR_TOKEN:-}"
 PROVIDER="${KERYX_SMOKE_PROVIDER:-}"
+MODEL="${KERYX_SMOKE_MODEL:-}"
 TIMEOUT_SECS="${KERYX_SMOKE_TIMEOUT_SECS:-60}"
 
 die() {
@@ -41,6 +42,14 @@ echo "smoke: unauthenticated POST /v1/sessions must be 401"
 code="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 5 -X POST "${KERYX_URL}/v1/sessions" || true)"
 [[ "${code}" == "401" ]] || die "expected 401 without token, got ${code}"
 
+echo "smoke: list providers"
+if providers_json="$(curl -fsS --max-time 10 "${KERYX_URL}/v1/providers" \
+  -H "authorization: Bearer ${TOKEN}" 2>/dev/null)"; then
+  echo "  ${providers_json}"
+else
+  echo "  (providers catalog unavailable — older worker?)"
+fi
+
 echo "smoke: create session"
 session_json="$(curl -fsS --max-time 10 -X POST "${KERYX_URL}/v1/sessions" \
   -H "authorization: Bearer ${TOKEN}")" || die "create session failed"
@@ -48,15 +57,32 @@ session_id="$(json_field "${session_json}" id)"
 [[ -n "${session_id}" ]] || die "no session id in: ${session_json}"
 echo "  session_id=${session_id}"
 
-goal='{"goal":"keryx smoke test"}'
-if [[ -n "${PROVIDER}" ]]; then
-  if command -v jq >/dev/null 2>&1; then
+if command -v jq >/dev/null 2>&1; then
+  if [[ -n "${PROVIDER}" && -n "${MODEL}" ]]; then
+    goal="$(jq -nc --arg g "keryx smoke test" --arg p "${PROVIDER}" --arg m "${MODEL}" \
+      '{goal:$g, provider:$p, model:$m}')"
+  elif [[ -n "${PROVIDER}" ]]; then
     goal="$(jq -nc --arg g "keryx smoke test" --arg p "${PROVIDER}" '{goal:$g, provider:$p}')"
-  elif command -v python3 >/dev/null 2>&1; then
-    goal="$(python3 -c 'import json,sys; print(json.dumps({"goal":"keryx smoke test","provider":sys.argv[1]}))' "${PROVIDER}")"
+  elif [[ -n "${MODEL}" ]]; then
+    goal="$(jq -nc --arg g "keryx smoke test" --arg m "${MODEL}" '{goal:$g, model:$m}')"
   else
-    die "need jq or python3 when KERYX_SMOKE_PROVIDER is set"
+    goal='{"goal":"keryx smoke test"}'
   fi
+elif command -v python3 >/dev/null 2>&1; then
+  goal="$(python3 -c '
+import json, os
+d = {"goal": "keryx smoke test"}
+p = os.environ.get("KERYX_SMOKE_PROVIDER") or ""
+m = os.environ.get("KERYX_SMOKE_MODEL") or ""
+if p: d["provider"] = p
+if m: d["model"] = m
+print(json.dumps(d))
+')"
+else
+  if [[ -n "${PROVIDER}" || -n "${MODEL}" ]]; then
+    die "need jq or python3 when KERYX_SMOKE_PROVIDER or KERYX_SMOKE_MODEL is set"
+  fi
+  goal='{"goal":"keryx smoke test"}'
 fi
 
 echo "smoke: start run"

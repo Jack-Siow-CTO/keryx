@@ -1,109 +1,126 @@
-# Consumer web session Model providers
+# Consumer web session & subscription Model providers
 
-Opt-in adapters that use **operator-exported** ChatGPT or Grok **browser session** material (cookies / access tokens) instead of official API keys. See ADR 0010.
+Opt-in adapters that use **operator-exported** ChatGPT or Grok session material instead of (or alongside) official Platform API keys. See ADR 0010.
+
+Local-first layout: secrets under `~/.config/keryx/` (mode `600`). The Worker never opens a browser.
 
 ## Warnings (read first)
 
-- Wire formats are **unofficial** and **break without notice**.
+- Wire formats for browser/Codex paths are **unofficial** and **break without notice**.
 - This may violate vendor Terms of Service. **You own that risk.**
 - Prefer official API keys (`openai`, `grok`) when available.
-- Sessions expire; Keryx does **not** open a browser or refresh logins for you.
+- Sessions expire; Keryx does **not** refresh logins for you.
 - Never commit cookies/tokens; never put them in git, Transcript, or logs.
-- Control-plane auth remains the operator bearer token. Web session ≠ Principal.
+- Control-plane auth remains the operator bearer token. Web/Codex session ≠ Principal.
+- There is **no** runtime `fake` provider.
 
-## Provider keys
+## Provider matrix
 
-| `provider` value | Product | Auth inputs |
-|------------------|---------|-------------|
-| `openai_web` | ChatGPT web (Plus/Pro/Codex-in-browser style) | access token and/or cookie |
-| `grok_web` | Grok web | cookie (+ optional extra headers) |
-| `openai` / `grok` | Official APIs | API keys (existing) |
-| `fake` | In-process | none |
+| `provider` | Product | Auth kind | Inputs |
+|------------|---------|-----------|--------|
+| `openai` | OpenAI Platform API | `api_key` | `OPENAI_API_KEY` |
+| `grok` | xAI official API | `api_key` | `XAI_API_KEY` |
+| `openai_codex` | ChatGPT Plus/Pro via Codex OAuth | `oauth_access_token` | access token from `codex login` |
+| `openai_web` | ChatGPT browser conversation | `browser_session` | **cookie** (token-only needs `CHATGPT_WEB_FORCE=1`) |
+| `grok_web` | Grok web chat | `browser_session` | cookie (+ optional headers) |
 
-Select per Run:
+Select per Run (optional model override):
 
 ```json
-{ "goal": "summarize my notes", "provider": "openai_web" }
+{ "goal": "summarize my notes", "provider": "openai_codex", "model": "gpt-5.6-sol" }
 ```
 
-Or set Worker default:
+Or Worker default:
 
 ```bash
-export KERYX_DEFAULT_PROVIDER=openai_web
+export KERYX_DEFAULT_PROVIDER=openai_codex
 ```
 
-Web providers are **registered only when secrets resolve**. Selecting an unregistered provider fails closed.
+Providers register **only when secrets resolve**. Selecting an unregistered provider fails closed.
 
-## Environment / secret files
+List what is registered:
 
-### ChatGPT web (`openai_web`)
+```bash
+curl -sS -H "authorization: Bearer $TOKEN" "$KERYX_URL/v1/providers"
+```
+
+## Codex / ChatGPT subscription (`openai_codex`)
+
+Preferred path for Plus/Pro usage via the same OAuth material as the Codex CLI.
+
+```bash
+codex login
+./scripts/sync-chatgpt-codex-auth.sh
+# writes ~/.config/keryx/chatgpt-access-token (+ chatgpt-account-id)
+
+# ~/.config/keryx/env
+CHATGPT_WEB_ACCESS_TOKEN_FILE=$HOME/.config/keryx/chatgpt-access-token
+CHATGPT_ACCOUNT_ID_FILE=$HOME/.config/keryx/chatgpt-account-id
+# defaults if unset: CHATGPT_CODEX_MODEL=gpt-5.6-sol, CHATGPT_CODEX_REASONING_EFFORT=low
+# CHATGPT_CODEX_MODEL=gpt-5.6-sol
+# CHATGPT_CODEX_REASONING_EFFORT=low
+# optional alias: CHATGPT_CODEX_ACCESS_TOKEN_FILE=...
+KERYX_DEFAULT_PROVIDER=openai_codex
+```
 
 | Variable | Purpose |
 |----------|---------|
-| `CHATGPT_WEB_ACCESS_TOKEN` or `CHATGPT_WEB_ACCESS_TOKEN_FILE` | Bearer access token from browser session (preferred when available) |
-| `CHATGPT_WEB_COOKIE` or `CHATGPT_WEB_COOKIE_FILE` | Full `Cookie` header value (optional if token alone works for your export) |
-| `CHATGPT_WEB_HEADERS_FILE` | Optional JSON object of extra headers |
-| `CHATGPT_WEB_BASE_URL` | Default `https://chatgpt.com` (override for fixtures/proxies) |
+| `CHATGPT_WEB_ACCESS_TOKEN` / `*_FILE` | Codex OAuth access token |
+| `CHATGPT_CODEX_ACCESS_TOKEN` / `*_FILE` | Optional alias for the same token |
+| `CHATGPT_ACCOUNT_ID` / `*_FILE` | Account id (or JWT claim fallback) |
+| `CHATGPT_CODEX_MODEL` | Default model id (**default `gpt-5.6-sol`**) |
+| `CHATGPT_CODEX_MODELS` | Optional comma allowlist |
+| `CHATGPT_CODEX_REASONING_EFFORT` | `low` \| `medium` \| `high` (**default `low`**) |
+| `CHATGPT_CODEX_PATH` | Default `/backend-api/codex/responses` |
+| `CHATGPT_WEB_BASE_URL` | Default `https://chatgpt.com` |
+
+**Not** a Platform API key (`sk-…`). Token-only material registers `openai_codex`, not `openai_web` (unless `CHATGPT_WEB_FORCE=1`).
+
+## ChatGPT browser session (`openai_web`)
+
+| Variable | Purpose |
+|----------|---------|
+| `CHATGPT_WEB_COOKIE` / `*_FILE` | Full `Cookie` header (required to auto-register) |
+| `CHATGPT_WEB_ACCESS_TOKEN` / `*_FILE` | Optional bearer with cookie |
+| `CHATGPT_WEB_HEADERS_FILE` | Optional JSON extra headers |
 | `CHATGPT_WEB_PATH` | Default `/backend-api/conversation` |
-| `CHATGPT_WEB_MODEL` | Model label sent on the wire when required |
-| `CHATGPT_WEB_USER_AGENT` | Optional UA override |
+| `CHATGPT_WEB_MODEL` | Default `gpt-5.6-sol` |
+| `CHATGPT_WEB_FORCE` | `1` to register token-only as `openai_web` |
 
-At least one of **access token** or **cookie** must be non-empty to register `openai_web`.
+## Grok web session (`grok_web`)
 
-### Grok web (`grok_web`)
+This is the **subscription / browser** path for Grok. Official paid API remains `grok` + `XAI_API_KEY`.
 
 | Variable | Purpose |
 |----------|---------|
-| `GROK_WEB_COOKIE` or `GROK_WEB_COOKIE_FILE` | Full `Cookie` header value (required to register) |
-| `GROK_WEB_HEADERS_FILE` | Optional JSON object (e.g. challenge/signature style headers from a captured request) |
+| `GROK_WEB_COOKIE` / `*_FILE` | Full `Cookie` header (required) |
+| `GROK_WEB_HEADERS_FILE` | Optional JSON (challenge/signature headers) |
 | `GROK_WEB_BASE_URL` | Default `https://grok.com` |
 | `GROK_WEB_PATH` | Default `/rest/app-chat/conversations/new` |
-| `GROK_WEB_MODEL` | Model label when required |
-| `GROK_WEB_USER_AGENT` | Optional UA override |
+| `GROK_WEB_MODEL` | Default `grok-4.5` |
+| `GROK_WEB_REASONING_EFFORT` | Default `medium` |
+| `GROK_WEB_MODELS` | Optional allowlist |
 
-### Exporting secrets (operator procedure)
+### Exporting browser secrets
 
 1. Log in to ChatGPT or Grok in a normal browser.
-2. Open DevTools → Network; trigger a chat request.
-3. Copy the `Authorization: Bearer …` value and/or `Cookie` header (and any required custom headers).
-4. Write them to mode-`600` files outside git, e.g. `/run/secrets/chatgpt-access-token`.
-5. Point Keryx at those files with `*_FILE` env vars.
-6. When the session expires, re-export; Keryx will fail the Run with a non-secret “session expired or rejected” style error.
-
-Do **not** paste secrets into issue trackers or chat logs.
-
-## Example Worker env
-
-```bash
-export KERYX_OPERATOR_TOKEN="$(cat /run/secrets/keryx-operator-token)"
-export KERYX_DATA_DIR=/var/lib/keryx
-export KERYX_BIND=127.0.0.1:8787
-
-# Optional official APIs still work in parallel:
-# export OPENAI_API_KEY_FILE=/run/secrets/openai-api-key
-
-export CHATGPT_WEB_ACCESS_TOKEN_FILE=/run/secrets/chatgpt-access-token
-export CHATGPT_WEB_COOKIE_FILE=/run/secrets/chatgpt-cookie
-# export KERYX_DEFAULT_PROVIDER=openai_web
-
-export GROK_WEB_COOKIE_FILE=/run/secrets/grok-cookie
-# export GROK_WEB_HEADERS_FILE=/run/secrets/grok-extra-headers.json
-
-cargo run -p keryx-worker --release
-```
+2. DevTools → Network; trigger a chat request.
+3. Copy `Cookie` and any required custom headers (and Bearer if present).
+4. Write to mode-`600` files under `~/.config/keryx/`.
+5. Re-export when the session expires.
 
 ## Live verification (opt-in only)
 
 ```bash
 export KERYX_LIVE_MODELS=1
-# plus CHATGPT_WEB_* and/or GROK_WEB_* secrets
+# CHATGPT_WEB_* and/or GROK_WEB_* secrets
 cargo test -p keryx-model --test live_consumer_web -- --ignored --nocapture
 ```
 
-Default CI never requires consumer secrets or live consumer network (ADR 0009 / 0010).
+Default CI never requires consumer secrets (ADR 0009 / 0010).
 
 ## Related
 
-- ADR 0010, ADR 0005 (updated), ADR 0009
+- ADR 0010, ADR 0005
 - Official API live path: `docs/deploy/live-model-verification.md`
 - Tailnet edge: `docs/deploy/tailnet-edge.md`

@@ -24,6 +24,7 @@ pub fn router(state: AppState) -> Router {
         .route("/v1/runs/{run_id}", get(get_run))
         .route("/v1/runs/{run_id}/cancel", post(cancel_run))
         .route("/v1/runs/{run_id}/events", get(stream_run_events))
+        .route("/v1/providers", get(list_providers))
         .with_state(state)
 }
 
@@ -34,6 +35,22 @@ struct HealthResponse {
 
 async fn health() -> Json<HealthResponse> {
     Json(HealthResponse { status: "ok" })
+}
+
+#[derive(Serialize)]
+struct ProvidersResponse {
+    default: Option<String>,
+    providers: Vec<crate::state::ProviderInfo>,
+}
+
+async fn list_providers(
+    State(state): State<AppState>,
+    AuthPrincipal(_principal): AuthPrincipal,
+) -> Json<ProvidersResponse> {
+    Json(ProvidersResponse {
+        default: state.providers.default.clone(),
+        providers: state.providers.providers.clone(),
+    })
 }
 
 #[derive(Serialize)]
@@ -62,8 +79,10 @@ async fn create_session(
 #[derive(Deserialize)]
 struct StartRunRequest {
     goal: String,
-    /// Optional Model provider key (`openai`, `grok`, `fake`).
+    /// Optional Model provider key (`openai`, `grok`, `openai_codex`, …).
     provider: Option<String>,
+    /// Optional per-run model id override.
+    model: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -102,7 +121,13 @@ async fn start_run(
         .map_err(|_| ApiError::bad_request("invalid session id"))?;
     let run = state
         .control
-        .start_run(principal, session_id, body.goal, body.provider)
+        .start_run(
+            principal,
+            session_id,
+            body.goal,
+            body.provider,
+            body.model,
+        )
         .await?;
     Ok((StatusCode::CREATED, Json(run.into())))
 }

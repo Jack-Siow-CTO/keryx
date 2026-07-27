@@ -12,10 +12,19 @@ use serde_json::{json, Value};
 pub struct GrokWebProvider {
     config: ConsumerWebConfig,
     client: reqwest::Client,
+    /// Reasoning effort (`low` \| `medium` \| `high`); default medium with grok-4.5.
+    reasoning_effort: Option<String>,
 }
 
 impl GrokWebProvider {
     pub fn new(config: ConsumerWebConfig) -> Result<Self, ModelError> {
+        Self::new_with_reasoning(config, None)
+    }
+
+    pub fn new_with_reasoning(
+        config: ConsumerWebConfig,
+        reasoning_effort: Option<String>,
+    ) -> Result<Self, ModelError> {
         let cookie_missing = match config.auth.cookie_header.as_ref() {
             None => true,
             Some(s) => s.is_empty(),
@@ -27,7 +36,11 @@ impl GrokWebProvider {
             .user_agent(config.user_agent.clone())
             .build()
             .map_err(|e| ModelError::new(e.to_string()))?;
-        Ok(Self { config, client })
+        Ok(Self {
+            config,
+            client,
+            reasoning_effort,
+        })
     }
 
     pub fn from_env() -> Result<Option<Self>, String> {
@@ -40,23 +53,31 @@ impl GrokWebProvider {
         if !auth.is_usable() {
             return Ok(None);
         }
+        let reasoning_effort = std::env::var("GROK_WEB_REASONING_EFFORT")
+            .ok()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .or_else(|| Some("medium".into()));
         let config = ConsumerWebConfig {
             provider_name: "grok_web".into(),
             base_url: std::env::var("GROK_WEB_BASE_URL")
                 .unwrap_or_else(|_| "https://grok.com".into()),
             path: std::env::var("GROK_WEB_PATH")
                 .unwrap_or_else(|_| "/rest/app-chat/conversations/new".into()),
-            model: std::env::var("GROK_WEB_MODEL").unwrap_or_else(|_| "grok".into()),
+            model: std::env::var("GROK_WEB_MODEL").unwrap_or_else(|_| "grok-4.5".into()),
             auth,
             user_agent: std::env::var("GROK_WEB_USER_AGENT").unwrap_or_else(|_| {
                 "Mozilla/5.0 (compatible; KeryxWorker/0.1; +https://github.com/Jack-Siow-CTO/keryx)"
                     .into()
             }),
+            allowed_models: Vec::new(),
         };
-        Self::new(config).map(Some).map_err(|e| e.to_string())
+        Self::new_with_reasoning(config, reasoning_effort)
+            .map(Some)
+            .map_err(|e| e.to_string())
     }
 
-    fn build_body(&self, request: &ModelRequest) -> Value {
+    fn build_body(&self, request: &ModelRequest, model: &str) -> Value {
         // Flatten transcript into a single message payload the unofficial path accepts.
         let mut parts = Vec::new();
         for msg in &request.transcript {
@@ -72,17 +93,25 @@ impl GrokWebProvider {
         } else {
             parts.push(format!("user: {}", request.goal));
         }
-        json!({
+        let mut body = json!({
             "message": parts.join("\n"),
-            "model": self.config.model,
+            "model": model,
             "stream": true,
-        })
+        });
+        if let Some(effort) = &self.reasoning_effort {
+            body["reasoningEffort"] = json!(effort);
+        }
+        body
     }
 }
 
 #[async_trait]
 impl ModelProvider for GrokWebProvider {
     async fn complete(&self, request: ModelRequest) -> Result<ModelResponse, ModelError> {
+        let model = self
+            .config
+            .resolve_model(request.model.as_deref())
+            .map_err(ModelError::new)?;
         let secrets = self.config.auth.secret_values();
         let url = self.config.chat_url();
         let mut builder = self
@@ -90,7 +119,7 @@ impl ModelProvider for GrokWebProvider {
             .post(&url)
             .header("content-type", "application/json")
             .header("accept", "text/event-stream")
-            .json(&self.build_body(&request));
+            .json(&self.build_body(&request, &model));
 
         if let Some(cookie) = &self.config.auth.cookie_header {
             builder = builder.header("cookie", cookie);

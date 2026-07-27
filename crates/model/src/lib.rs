@@ -1,9 +1,13 @@
-//! Keryx model provider adapters (OpenAI, Grok, consumer web sessions) and test fakes.
+//! Keryx model provider adapters (OpenAI, Grok, consumer web sessions).
+//!
+//! Runtime registration is real providers only (`register_from_env`).  
+//! `FakeModelProvider` remains for Seam 1 / in-process tests — never registered by the Worker.
 
 mod consumer;
 mod fake;
 mod multi;
 mod openai_compatible;
+mod registry;
 
 pub use consumer::{
     load_secret, load_secret_pair, read_headers_file, redact_secrets, ChatGptCodexProvider,
@@ -14,6 +18,9 @@ pub use multi::MultiModelProvider;
 pub use openai_compatible::{
     grok_provider, openai_provider, GrokProvider, OpenAiCompatibleConfig, OpenAiCompatibleProvider,
     OpenAiProvider,
+};
+pub use registry::{
+    register_from_env, AuthKind, ProviderDescriptor, RegisteredProviders,
 };
 
 /// Workspace smoke: model adapter is loadable.

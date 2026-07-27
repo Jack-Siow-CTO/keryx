@@ -8,8 +8,22 @@ use thiserror::Error;
 pub struct ModelRequest {
     pub goal: String,
     pub transcript: Vec<TranscriptMessage>,
-    /// Optional provider key (`openai`, `grok`, `fake`) for multi-provider routing.
+    /// Optional provider key (`openai`, `grok`, `openai_codex`, …) for multi-provider routing.
     pub provider: Option<String>,
+    /// Optional per-run model id override (provider default when `None`).
+    pub model: Option<String>,
+}
+
+impl ModelRequest {
+    #[must_use]
+    pub fn new(goal: impl Into<String>) -> Self {
+        Self {
+            goal: goal.into(),
+            transcript: Vec::new(),
+            provider: None,
+            model: None,
+        }
+    }
 }
 
 /// Completion returned by a Model provider.

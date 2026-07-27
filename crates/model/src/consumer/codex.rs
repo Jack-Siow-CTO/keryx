@@ -54,26 +54,19 @@ impl ChatGptCodexProvider {
         })
     }
 
-    /// Build config from environment. Registers only when access token is present.
-    ///
-    /// | Variable | Purpose |
-    /// |----------|---------|
-    /// | `CHATGPT_WEB_ACCESS_TOKEN` / `*_FILE` | Codex OAuth access token |
-    /// | `CHATGPT_ACCOUNT_ID` / `*_FILE` | Account id (JWT claim or auth.json) |
-    /// | `CHATGPT_CODEX_MODEL` | Model id (default `gpt-5.6-sol`) |
-    /// | `CHATGPT_CODEX_REASONING_EFFORT` | `low` \| `medium` \| `high` (optional) |
-    /// | `CHATGPT_WEB_BASE_URL` | Default `https://chatgpt.com` |
-    /// | `CHATGPT_CODEX_PATH` | Default `/backend-api/codex/responses` |
-    /// | `CHATGPT_WEB_HEADERS_FILE` | Optional extra headers JSON |
-    pub fn from_env() -> Result<Option<Self>, String> {
-        let token = super::auth::load_secret_pair("CHATGPT_WEB_ACCESS_TOKEN")?;
-        let Some(token) = token.filter(|t| !t.is_empty()) else {
-            return Ok(None);
-        };
-        let account_id = super::auth::load_secret_pair("CHATGPT_ACCOUNT_ID")?
+    #[must_use]
+    pub fn default_model(&self) -> &str {
+        &self.config.model
+    }
+
+    /// Build from a raw access token (registry path). Loads account id / headers from env.
+    pub fn from_access_token(token: String) -> Result<Self, ModelError> {
+        let account_id = super::auth::load_secret_pair("CHATGPT_ACCOUNT_ID")
+            .map_err(ModelError::new)?
             .or_else(|| extract_account_id_from_jwt(&token));
 
-        let mut extra = super::auth::read_headers_file("CHATGPT_WEB_HEADERS_FILE")?;
+        let mut extra = super::auth::read_headers_file("CHATGPT_WEB_HEADERS_FILE")
+            .map_err(ModelError::new)?;
         if let Some(acct) = account_id {
             extra
                 .entry("chatgpt-account-id".into())
@@ -87,15 +80,28 @@ impl ChatGptCodexProvider {
             .entry("originator".into())
             .or_insert_with(|| "keryx".into());
 
+        let models = std::env::var("CHATGPT_CODEX_MODELS")
+            .ok()
+            .map(|s| {
+                s.split(',')
+                    .map(str::trim)
+                    .filter(|t| !t.is_empty())
+                    .map(str::to_string)
+                    .collect()
+            })
+            .unwrap_or_default();
+
         let auth = super::auth::ConsumerWebAuth {
             cookie_header: None,
             bearer_token: Some(token),
             extra_headers: extra,
         };
+        // Default: gpt-5.6-sol on low reasoning (operator may override via env).
         let reasoning_effort = std::env::var("CHATGPT_CODEX_REASONING_EFFORT")
             .ok()
             .map(|s| s.trim().to_string())
-            .filter(|s| !s.is_empty());
+            .filter(|s| !s.is_empty())
+            .or_else(|| Some("low".into()));
         let config = ConsumerWebConfig {
             provider_name: "openai_codex".into(),
             base_url: std::env::var("CHATGPT_WEB_BASE_URL")
@@ -106,13 +112,25 @@ impl ChatGptCodexProvider {
             auth,
             user_agent: std::env::var("CHATGPT_WEB_USER_AGENT")
                 .unwrap_or_else(|_| "keryx/0.1 (chatgpt-subscription)".into()),
+            allowed_models: models,
         };
         Self::new_with_reasoning(config, reasoning_effort)
+    }
+
+    /// Build config from environment. Registers only when access token is present.
+    pub fn from_env() -> Result<Option<Self>, String> {
+        let token = super::auth::load_secret_pair("CHATGPT_CODEX_ACCESS_TOKEN")?
+            .or(super::auth::load_secret_pair("CHATGPT_WEB_ACCESS_TOKEN")?)
+            .filter(|t| !t.is_empty());
+        let Some(token) = token else {
+            return Ok(None);
+        };
+        Self::from_access_token(token)
             .map(Some)
             .map_err(|e| e.to_string())
     }
 
-    fn build_body(&self, request: &ModelRequest) -> Value {
+    fn build_body(&self, request: &ModelRequest, model: &str) -> Value {
         let mut input: Vec<Value> = Vec::new();
         for msg in &request.transcript {
             let role = match msg.role {
@@ -138,7 +156,7 @@ impl ChatGptCodexProvider {
             }));
         }
         let mut body = json!({
-            "model": self.config.model,
+            "model": model,
             "input": input,
             "stream": true,
             "store": false,
@@ -171,6 +189,10 @@ fn extract_account_id_from_jwt(token: &str) -> Option<String> {
 #[async_trait]
 impl ModelProvider for ChatGptCodexProvider {
     async fn complete(&self, request: ModelRequest) -> Result<ModelResponse, ModelError> {
+        let model = self
+            .config
+            .resolve_model(request.model.as_deref())
+            .map_err(ModelError::new)?;
         let secrets = self.config.auth.secret_values();
         let url = self.config.chat_url();
         let session_id = Uuid::new_v4().to_string();
@@ -182,7 +204,7 @@ impl ModelProvider for ChatGptCodexProvider {
             .header("accept", "text/event-stream")
             .header("session-id", &session_id)
             .header("x-client-request-id", &session_id)
-            .json(&self.build_body(&request));
+            .json(&self.build_body(&request, &model));
 
         if let Some(token) = &self.config.auth.bearer_token {
             builder = builder.header("authorization", format!("Bearer {token}"));
@@ -238,7 +260,6 @@ mod tests {
         let payload = base64::engine::general_purpose::URL_SAFE_NO_PAD
             .encode(br#"{"https://api.openai.com/auth":{"chatgpt_account_id":"acct-1"}}"#);
         let jwt = format!("hdr.{payload}.sig");
-        // our decoder uses STANDARD after -/_ rewrite; URL_SAFE_NO_PAD works with rewrite
         assert_eq!(extract_account_id_from_jwt(&jwt).as_deref(), Some("acct-1"));
     }
 }

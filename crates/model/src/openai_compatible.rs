@@ -16,6 +16,10 @@ pub struct OpenAiCompatibleConfig {
     pub model: String,
     /// Provider name for errors/logs (`openai`, `grok`).
     pub provider_name: String,
+    /// When non-empty, only these model ids are accepted.
+    pub allowed_models: Vec<String>,
+    /// Optional reasoning effort (`low` \| `medium` \| `high`) for models that support it.
+    pub reasoning_effort: Option<String>,
 }
 
 impl OpenAiCompatibleConfig {
@@ -26,6 +30,8 @@ impl OpenAiCompatibleConfig {
             api_key: api_key.into(),
             model: model.into(),
             provider_name: "openai".into(),
+            allowed_models: Vec::new(),
+            reasoning_effort: None,
         }
     }
 
@@ -36,6 +42,8 @@ impl OpenAiCompatibleConfig {
             api_key: api_key.into(),
             model: model.into(),
             provider_name: "grok".into(),
+            allowed_models: Vec::new(),
+            reasoning_effort: None,
         }
     }
 
@@ -43,6 +51,41 @@ impl OpenAiCompatibleConfig {
     pub fn with_base_url(mut self, base_url: impl Into<String>) -> Self {
         self.base_url = base_url.into();
         self
+    }
+
+    #[must_use]
+    pub fn with_allowed_models(mut self, models: Vec<String>) -> Self {
+        self.allowed_models = models;
+        self
+    }
+
+    #[must_use]
+    pub fn with_reasoning_effort(mut self, effort: impl Into<String>) -> Self {
+        let effort = effort.into();
+        self.reasoning_effort = if effort.trim().is_empty() {
+            None
+        } else {
+            Some(effort)
+        };
+        self
+    }
+
+    /// Resolve model: request override → config default, then optional allowlist.
+    pub fn resolve_model(&self, override_model: Option<&str>) -> Result<String, ModelError> {
+        let model = override_model
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .unwrap_or(self.model.as_str())
+            .to_string();
+        if !self.allowed_models.is_empty()
+            && !self.allowed_models.iter().any(|m| m == &model)
+        {
+            return Err(ModelError::new(format!(
+                "{}: model '{model}' not in allowlist {:?}",
+                self.provider_name, self.allowed_models
+            )));
+        }
+        Ok(model)
     }
 }
 
@@ -92,12 +135,17 @@ impl OpenAiCompatibleProvider {
 #[async_trait]
 impl ModelProvider for OpenAiCompatibleProvider {
     async fn complete(&self, request: ModelRequest) -> Result<ModelResponse, ModelError> {
+        let model = self.config.resolve_model(request.model.as_deref())?;
         let url = self.chat_url();
-        let body = json!({
-            "model": self.config.model,
+        let mut body = json!({
+            "model": model,
             "messages": self.build_messages(&request),
             "stream": true,
         });
+        if let Some(effort) = &self.config.reasoning_effort {
+            // OpenAI-style reasoning models accept top-level reasoning_effort.
+            body["reasoning_effort"] = json!(effort);
+        }
 
         let response = self
             .client
@@ -113,9 +161,9 @@ impl ModelProvider for OpenAiCompatibleProvider {
 
         let status = response.status();
         if !status.is_success() {
-            let text = response.text().await.unwrap_or_default();
+            // Do not echo full upstream bodies (may contain sensitive request context).
             return Err(ModelError::new(format!(
-                "{} HTTP {status}: {text}",
+                "{}: upstream HTTP {status}",
                 self.config.provider_name
             )));
         }
