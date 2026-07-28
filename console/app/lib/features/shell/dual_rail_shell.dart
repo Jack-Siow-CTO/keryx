@@ -3,6 +3,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../theme/keryx_theme.dart';
 import '../auth/auth_controller.dart';
+import '../sessions/session_detail.dart';
+import '../sessions/sessions_list.dart';
 import '../settings/settings_screen.dart';
 
 /// Dual-rail home: Inbox + Sessions simultaneously on wide (ADR 0014, 0020).
@@ -71,17 +73,11 @@ class _DualRailShellState extends ConsumerState<DualRailShell> {
             width: 300,
             child: Material(
               color: Theme.of(context).colorScheme.surfaceContainerLow,
-              child: const Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  _SectionTitle(title: 'Sessions'),
-                  Expanded(child: SessionsPlaceholder()),
-                ],
-              ),
+              child: const SessionsList(),
             ),
           ),
           const VerticalDivider(width: 1),
-          const Expanded(child: _MainPlaceholder(tab: 1)),
+          const Expanded(child: SessionDetailPane()),
         ],
       ),
     );
@@ -123,14 +119,18 @@ class _DualRailShellState extends ConsumerState<DualRailShell> {
                   Expanded(
                     child: _index == 0
                         ? const InboxPlaceholder()
-                        : const SessionsPlaceholder(),
+                        : const SessionsList(),
                   ),
                 ],
               ),
             ),
           ),
           const VerticalDivider(width: 1),
-          Expanded(child: _MainPlaceholder(tab: _index)),
+          Expanded(
+            child: _index == 0
+                ? const _MainPlaceholder(tab: 0)
+                : const SessionDetailPane(),
+          ),
         ],
       ),
     );
@@ -149,7 +149,9 @@ class _DualRailShellState extends ConsumerState<DualRailShell> {
       ),
       body: switch (_index) {
         0 => const InboxPlaceholder(),
-        1 => const SessionsPlaceholder(),
+        1 => SessionsList(
+            onOpenSession: (id) => _pushSessionDetail(context),
+          ),
         _ => MorePanel(onOpenSettings: () => _openSettings(context)),
       },
       bottomNavigationBar: NavigationBar(
@@ -179,6 +181,20 @@ class _DualRailShellState extends ConsumerState<DualRailShell> {
   void _openSettings(BuildContext context) {
     Navigator.of(context).push(
       MaterialPageRoute<void>(builder: (_) => const SettingsScreen()),
+    );
+  }
+
+  /// Narrow stack: Session detail is full-screen with back to Sessions list.
+  void _pushSessionDetail(BuildContext context) {
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => Scaffold(
+          appBar: AppBar(
+            title: const Text('Session'),
+          ),
+          body: const SessionDetailPane(),
+        ),
+      ),
     );
   }
 }
@@ -249,21 +265,6 @@ class InboxPlaceholder extends StatelessWidget {
       body:
           'Cross-Session needs-you items (Approvals, failed Runs) will appear here. '
           'Nothing needs you yet.',
-    );
-  }
-}
-
-class SessionsPlaceholder extends StatelessWidget {
-  const SessionsPlaceholder({super.key});
-
-  @override
-  Widget build(BuildContext context) {
-    return const _EmptyRail(
-      icon: Icons.forum_outlined,
-      title: 'Sessions',
-      body:
-          'Sessions are durable channels for Transcript work. '
-          'Create and open Sessions in a later Console slice.',
     );
   }
 }

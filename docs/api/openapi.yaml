@@ -49,6 +49,85 @@ paths:
                 $ref: "#/components/schemas/ProvidersResponse"
         "401":
           $ref: "#/components/responses/Unauthorized"
+  /v1/sessions:
+    get:
+      tags: [Sessions]
+      operationId: listSessions
+      summary: List Sessions (operator projection)
+      description: |
+        Console channel list: title (override or default from first user goal),
+        timestamps, last message preview, active root Run summary, pending Approval count.
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Session list
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SessionListResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+    post:
+      tags: [Sessions]
+      operationId: createSession
+      summary: Create a Session
+      security:
+        - bearerAuth: []
+      responses:
+        "201":
+          description: Created Session projection
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SessionResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+  /v1/sessions/{session_id}:
+    get:
+      tags: [Sessions]
+      operationId: getSession
+      summary: Get Session detail projection
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/SessionId"
+      responses:
+        "200":
+          description: Session projection
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SessionResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    patch:
+      tags: [Sessions]
+      operationId: patchSession
+      summary: Rename Session title (durable on Worker)
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/SessionId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PatchSessionRequest"
+      responses:
+        "200":
+          description: Updated Session projection
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SessionResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
 components:
   securitySchemes:
     bearerAuth:
@@ -56,9 +135,23 @@ components:
       scheme: bearer
       bearerFormat: operator-token
       description: Operator token Principal auth (ADR 0004 / 0021). Console stores this in OS secure storage only.
+  parameters:
+    SessionId:
+      name: session_id
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
   responses:
     Unauthorized:
       description: Missing or invalid operator token; fail closed
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorBody"
+    NotFound:
+      description: Resource not found
       content:
         application/json:
           schema:
@@ -116,3 +209,65 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/ProviderInfo"
+    ActiveRootRunSummary:
+      type: object
+      required: [id, goal, status, origin]
+      properties:
+        id:
+          type: string
+        goal:
+          type: string
+        status:
+          type: string
+        origin:
+          type: string
+    SessionResponse:
+      type: object
+      required:
+        - id
+        - principal_id
+        - title
+        - title_is_custom
+        - created_at
+        - updated_at
+        - pending_approval_count
+      properties:
+        id:
+          type: string
+        principal_id:
+          type: string
+        title:
+          type: string
+          description: Resolved display title (override or default from first user goal / "New Session")
+        title_is_custom:
+          type: boolean
+        created_at:
+          type: integer
+          format: int64
+        updated_at:
+          type: integer
+          format: int64
+        last_message_preview:
+          type: string
+          nullable: true
+        active_root_run:
+          nullable: true
+          allOf:
+            - $ref: "#/components/schemas/ActiveRootRunSummary"
+        pending_approval_count:
+          type: integer
+          minimum: 0
+    SessionListResponse:
+      type: object
+      required: [sessions]
+      properties:
+        sessions:
+          type: array
+          items:
+            $ref: "#/components/schemas/SessionResponse"
+    PatchSessionRequest:
+      type: object
+      properties:
+        title:
+          type: string
+          description: Operator title override; empty clears to default

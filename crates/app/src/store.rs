@@ -9,11 +9,16 @@ use keryx_domain::{
 pub trait SessionStore: Send + Sync {
     async fn create_session(&self, session: Session) -> Result<(), String>;
     async fn get_session(&self, id: SessionId) -> Result<Option<Session>, String>;
+    async fn update_session(&self, session: Session) -> Result<(), String>;
+    /// All Sessions, newest `updated_at` first.
+    async fn list_sessions(&self) -> Result<Vec<Session>, String>;
     async fn count_sessions(&self) -> Result<usize, String>;
 
     async fn create_run(&self, run: Run) -> Result<(), String>;
     async fn update_run(&self, run: Run) -> Result<(), String>;
     async fn get_run(&self, id: RunId) -> Result<Option<Run>, String>;
+    /// Runs for a Session (any status), unordered.
+    async fn list_runs_for_session(&self, session_id: SessionId) -> Result<Vec<Run>, String>;
     async fn count_runs(&self) -> Result<usize, String>;
 
     async fn get_transcript(&self, session_id: SessionId) -> Result<Transcript, String>;

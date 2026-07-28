@@ -114,3 +114,108 @@ final class ProvidersResponse {
         'providers': providers.map((p) => p.toJson()).toList(),
       };
 }
+
+/// Active root Run chip on Session list/detail (ADR 0027).
+final class ActiveRootRunSummary {
+  const ActiveRootRunSummary({
+    required this.id,
+    required this.goal,
+    required this.status,
+    required this.origin,
+  });
+
+  final String id;
+  final String goal;
+  final String status;
+  final String origin;
+
+  factory ActiveRootRunSummary.fromJson(Map<String, dynamic> json) {
+    return ActiveRootRunSummary(
+      id: json['id'] as String,
+      goal: json['goal'] as String,
+      status: json['status'] as String,
+      origin: json['origin'] as String,
+    );
+  }
+
+  Map<String, dynamic> toJson() => {
+        'id': id,
+        'goal': goal,
+        'status': status,
+        'origin': origin,
+      };
+}
+
+/// Operator Session projection for list/detail.
+final class SessionSummary {
+  const SessionSummary({
+    required this.id,
+    required this.principalId,
+    required this.title,
+    required this.titleIsCustom,
+    required this.createdAt,
+    required this.updatedAt,
+    this.lastMessagePreview,
+    this.activeRootRun,
+    required this.pendingApprovalCount,
+  });
+
+  final String id;
+  final String principalId;
+  final String title;
+  final bool titleIsCustom;
+  final int createdAt;
+  final int updatedAt;
+  final String? lastMessagePreview;
+  final ActiveRootRunSummary? activeRootRun;
+  final int pendingApprovalCount;
+
+  factory SessionSummary.fromJson(Map<String, dynamic> json) {
+    final active = json['active_root_run'];
+    return SessionSummary(
+      id: json['id'] as String,
+      principalId: json['principal_id'] as String,
+      title: json['title'] as String,
+      titleIsCustom: json['title_is_custom'] as bool? ?? false,
+      createdAt: (json['created_at'] as num).toInt(),
+      updatedAt: (json['updated_at'] as num).toInt(),
+      lastMessagePreview: json['last_message_preview'] as String?,
+      activeRootRun: active is Map
+          ? ActiveRootRunSummary.fromJson(Map<String, dynamic>.from(active))
+          : null,
+      pendingApprovalCount:
+          (json['pending_approval_count'] as num?)?.toInt() ?? 0,
+    );
+  }
+
+  Map<String, dynamic> toJson() => {
+        'id': id,
+        'principal_id': principalId,
+        'title': title,
+        'title_is_custom': titleIsCustom,
+        'created_at': createdAt,
+        'updated_at': updatedAt,
+        'last_message_preview': lastMessagePreview,
+        'active_root_run': activeRootRun?.toJson(),
+        'pending_approval_count': pendingApprovalCount,
+      };
+}
+
+final class SessionListResponse {
+  const SessionListResponse({required this.sessions});
+
+  final List<SessionSummary> sessions;
+
+  factory SessionListResponse.fromJson(Map<String, dynamic> json) {
+    final raw = json['sessions'];
+    if (raw is! List) {
+      throw const FormatException('SessionListResponse.sessions must be a list');
+    }
+    return SessionListResponse(
+      sessions: raw
+          .whereType<Map>()
+          .map((e) => SessionSummary.fromJson(Map<String, dynamic>.from(e)))
+          .toList(),
+    );
+  }
+}

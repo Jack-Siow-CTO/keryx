@@ -8,8 +8,8 @@ use axum::routing::{get, post};
 use axum::{Json, Router};
 use futures_util::stream::{self, Stream, StreamExt};
 use keryx_domain::{
-    Approval, ApprovalId, ApprovalStatus, Run, RunEvent, RunId, RunStatus, Schedule, ScheduleId,
-    ScheduleStatus, Session, SessionId,
+    ActiveRootRunSummary, Approval, ApprovalId, ApprovalStatus, Run, RunEvent, RunId, RunStatus,
+    Schedule, ScheduleId, ScheduleStatus, Session, SessionId, SessionSummary,
 };
 use serde::{Deserialize, Serialize};
 use std::convert::Infallible;
@@ -22,7 +22,11 @@ use tokio_stream::wrappers::BroadcastStream;
 pub fn router(state: AppState) -> Router {
     Router::new()
         .route("/health", get(health))
-        .route("/v1/sessions", post(create_session))
+        .route("/v1/sessions", get(list_sessions).post(create_session))
+        .route(
+            "/v1/sessions/{session_id}",
+            get(get_session).patch(patch_session),
+        )
         .route("/v1/sessions/{session_id}/runs", post(start_run))
         .route("/v1/runs/{run_id}", get(get_run))
         .route("/v1/runs/{run_id}/cancel", post(cancel_run))
@@ -71,15 +75,95 @@ async fn list_providers(
 struct SessionResponse {
     id: String,
     principal_id: String,
+    title: String,
+    title_is_custom: bool,
+    created_at: i64,
+    updated_at: i64,
+    last_message_preview: Option<String>,
+    active_root_run: Option<ActiveRootRunSummary>,
+    pending_approval_count: u32,
+}
+
+impl From<SessionSummary> for SessionResponse {
+    fn from(s: SessionSummary) -> Self {
+        Self {
+            id: s.id,
+            principal_id: s.principal_id,
+            title: s.title,
+            title_is_custom: s.title_is_custom,
+            created_at: s.created_at,
+            updated_at: s.updated_at,
+            last_message_preview: s.last_message_preview,
+            active_root_run: s.active_root_run,
+            pending_approval_count: s.pending_approval_count,
+        }
+    }
 }
 
 impl From<Session> for SessionResponse {
+    /// Minimal response when projection is not yet loaded (create path reloads summary).
     fn from(session: Session) -> Self {
         Self {
             id: session.id.to_string(),
             principal_id: session.principal_id.to_string(),
+            title: session.display_title(),
+            title_is_custom: session
+                .title
+                .as_ref()
+                .map(|t| !t.trim().is_empty())
+                .unwrap_or(false),
+            created_at: session.created_at,
+            updated_at: session.updated_at,
+            last_message_preview: None,
+            active_root_run: None,
+            pending_approval_count: 0,
         }
     }
+}
+
+#[derive(Serialize)]
+struct SessionListResponse {
+    sessions: Vec<SessionResponse>,
+}
+
+async fn list_sessions(
+    State(state): State<AppState>,
+    AuthPrincipal(_principal): AuthPrincipal,
+) -> Result<Json<SessionListResponse>, ApiError> {
+    let sessions = state.control.list_sessions().await?;
+    Ok(Json(SessionListResponse {
+        sessions: sessions.into_iter().map(SessionResponse::from).collect(),
+    }))
+}
+
+async fn get_session(
+    State(state): State<AppState>,
+    AuthPrincipal(_principal): AuthPrincipal,
+    Path(session_id): Path<String>,
+) -> Result<Json<SessionResponse>, ApiError> {
+    let session_id = SessionId::from_str(&session_id)
+        .map_err(|_| ApiError::bad_request("invalid session id"))?;
+    let summary = state.control.get_session(session_id).await?;
+    Ok(Json(SessionResponse::from(summary)))
+}
+
+#[derive(Deserialize)]
+struct PatchSessionRequest {
+    /// Operator title override. Empty string clears to default (first user goal).
+    title: Option<String>,
+}
+
+async fn patch_session(
+    State(state): State<AppState>,
+    AuthPrincipal(_principal): AuthPrincipal,
+    Path(session_id): Path<String>,
+    Json(body): Json<PatchSessionRequest>,
+) -> Result<Json<SessionResponse>, ApiError> {
+    let session_id = SessionId::from_str(&session_id)
+        .map_err(|_| ApiError::bad_request("invalid session id"))?;
+    let title = body.title.map(|t| t.trim().to_string());
+    let summary = state.control.patch_session_title(session_id, title).await?;
+    Ok(Json(SessionResponse::from(summary)))
 }
 
 async fn create_session(
@@ -87,7 +171,9 @@ async fn create_session(
     AuthPrincipal(principal): AuthPrincipal,
 ) -> Result<(StatusCode, Json<SessionResponse>), ApiError> {
     let session = state.control.create_session(principal).await?;
-    Ok((StatusCode::CREATED, Json(session.into())))
+    // Return full projection for Console list consistency.
+    let summary = state.control.get_session(session.id).await?;
+    Ok((StatusCode::CREATED, Json(SessionResponse::from(summary))))
 }
 
 #[derive(Deserialize)]

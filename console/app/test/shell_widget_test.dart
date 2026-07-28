@@ -61,10 +61,9 @@ void main() {
 
       expect(find.byType(DualRailShell), findsOneWidget);
       expect(find.byType(InboxPlaceholder), findsOneWidget);
-      expect(find.byType(SessionsPlaceholder), findsOneWidget);
-      // Both section titles present at once (dual-rail).
-      expect(find.text('Inbox'), findsWidgets);
+      // Sessions rail is live list (may show empty/loading/error without Worker).
       expect(find.text('Sessions'), findsWidgets);
+      expect(find.text('Inbox'), findsWidgets);
       expect(find.byType(NavigationBar), findsNothing);
     });
 

@@ -38,6 +38,22 @@ impl SessionStore for InMemorySessionStore {
         Ok(sessions.get(&id).cloned())
     }
 
+    async fn update_session(&self, session: Session) -> Result<(), String> {
+        let mut sessions = self.sessions.lock().map_err(|e| e.to_string())?;
+        if !sessions.contains_key(&session.id) {
+            return Err(format!("session {} not found", session.id));
+        }
+        sessions.insert(session.id, session);
+        Ok(())
+    }
+
+    async fn list_sessions(&self) -> Result<Vec<Session>, String> {
+        let sessions = self.sessions.lock().map_err(|e| e.to_string())?;
+        let mut list: Vec<Session> = sessions.values().cloned().collect();
+        list.sort_by_key(|b| std::cmp::Reverse(b.updated_at));
+        Ok(list)
+    }
+
     async fn count_sessions(&self) -> Result<usize, String> {
         let sessions = self.sessions.lock().map_err(|e| e.to_string())?;
         Ok(sessions.len())
@@ -61,6 +77,15 @@ impl SessionStore for InMemorySessionStore {
     async fn get_run(&self, id: RunId) -> Result<Option<Run>, String> {
         let runs = self.runs.lock().map_err(|e| e.to_string())?;
         Ok(runs.get(&id).cloned())
+    }
+
+    async fn list_runs_for_session(&self, session_id: SessionId) -> Result<Vec<Run>, String> {
+        let runs = self.runs.lock().map_err(|e| e.to_string())?;
+        Ok(runs
+            .values()
+            .filter(|r| r.session_id == session_id)
+            .cloned()
+            .collect())
     }
 
     async fn count_runs(&self) -> Result<usize, String> {

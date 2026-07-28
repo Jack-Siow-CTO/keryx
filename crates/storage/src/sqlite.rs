@@ -44,7 +44,10 @@ impl SqliteSessionStore {
             r"
             CREATE TABLE IF NOT EXISTS sessions (
                 id TEXT PRIMARY KEY NOT NULL,
-                principal_id TEXT NOT NULL
+                principal_id TEXT NOT NULL,
+                title TEXT,
+                created_at INTEGER NOT NULL DEFAULT 0,
+                updated_at INTEGER NOT NULL DEFAULT 0
             );
             CREATE TABLE IF NOT EXISTS runs (
                 id TEXT PRIMARY KEY NOT NULL,
@@ -144,6 +147,50 @@ impl SqliteSessionStore {
             conn.execute("ALTER TABLE runs ADD COLUMN parent_run_id TEXT", [])
                 .map_err(|e| e.to_string())?;
         }
+
+        // Console: Session list projection fields (ADR 0027).
+        Self::ensure_column(
+            &conn,
+            "sessions",
+            "title",
+            "ALTER TABLE sessions ADD COLUMN title TEXT",
+        )?;
+        Self::ensure_column(
+            &conn,
+            "sessions",
+            "created_at",
+            "ALTER TABLE sessions ADD COLUMN created_at INTEGER NOT NULL DEFAULT 0",
+        )?;
+        Self::ensure_column(
+            &conn,
+            "sessions",
+            "updated_at",
+            "ALTER TABLE sessions ADD COLUMN updated_at INTEGER NOT NULL DEFAULT 0",
+        )?;
+        Ok(())
+    }
+
+    fn ensure_column(
+        conn: &Connection,
+        table: &str,
+        column: &str,
+        alter_sql: &str,
+    ) -> Result<(), String> {
+        let mut stmt = conn
+            .prepare(&format!("PRAGMA table_info({table})"))
+            .map_err(|e| e.to_string())?;
+        let mut rows = stmt.query([]).map_err(|e| e.to_string())?;
+        let mut found = false;
+        while let Some(row) = rows.next().map_err(|e| e.to_string())? {
+            let name: String = row.get(1).map_err(|e| e.to_string())?;
+            if name == column {
+                found = true;
+                break;
+            }
+        }
+        if !found {
+            conn.execute(alter_sql, []).map_err(|e| e.to_string())?;
+        }
         Ok(())
     }
 
@@ -161,6 +208,21 @@ impl SqliteSessionStore {
 
 fn parse_session_id(s: &str) -> Result<SessionId, String> {
     SessionId::from_str(s).map_err(|e| e.to_string())
+}
+
+fn row_to_session(row: &rusqlite::Row<'_>) -> Result<Session, String> {
+    let sid: String = row.get(0).map_err(|e| e.to_string())?;
+    let principal: String = row.get(1).map_err(|e| e.to_string())?;
+    let title: Option<String> = row.get(2).map_err(|e| e.to_string())?;
+    let created_at: i64 = row.get(3).map_err(|e| e.to_string())?;
+    let updated_at: i64 = row.get(4).map_err(|e| e.to_string())?;
+    Ok(Session {
+        id: parse_session_id(&sid)?,
+        principal_id: PrincipalId::new(principal),
+        title: title.filter(|s| !s.is_empty()),
+        created_at,
+        updated_at,
+    })
 }
 
 fn parse_run_id(s: &str) -> Result<RunId, String> {
@@ -242,8 +304,15 @@ impl SessionStore for SqliteSessionStore {
     async fn create_session(&self, session: Session) -> Result<(), String> {
         let conn = self.conn.lock().map_err(|e| e.to_string())?;
         conn.execute(
-            "INSERT INTO sessions (id, principal_id) VALUES (?1, ?2)",
-            params![session.id.to_string(), session.principal_id.to_string()],
+            "INSERT INTO sessions (id, principal_id, title, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![
+                session.id.to_string(),
+                session.principal_id.to_string(),
+                session.title,
+                session.created_at,
+                session.updated_at,
+            ],
         )
         .map_err(|e| e.to_string())?;
         Ok(())
@@ -252,22 +321,54 @@ impl SessionStore for SqliteSessionStore {
     async fn get_session(&self, id: SessionId) -> Result<Option<Session>, String> {
         let conn = self.conn.lock().map_err(|e| e.to_string())?;
         let mut stmt = conn
-            .prepare("SELECT id, principal_id FROM sessions WHERE id = ?1")
+            .prepare(
+                "SELECT id, principal_id, title, created_at, updated_at FROM sessions WHERE id = ?1",
+            )
             .map_err(|e| e.to_string())?;
         let mut rows = stmt
             .query(params![id.to_string()])
             .map_err(|e| e.to_string())?;
         match rows.next().map_err(|e| e.to_string())? {
-            Some(row) => {
-                let sid: String = row.get(0).map_err(|e| e.to_string())?;
-                let principal: String = row.get(1).map_err(|e| e.to_string())?;
-                Ok(Some(Session {
-                    id: parse_session_id(&sid)?,
-                    principal_id: PrincipalId::new(principal),
-                }))
-            }
+            Some(row) => Ok(Some(row_to_session(row)?)),
             None => Ok(None),
         }
+    }
+
+    async fn update_session(&self, session: Session) -> Result<(), String> {
+        let conn = self.conn.lock().map_err(|e| e.to_string())?;
+        let n = conn
+            .execute(
+                "UPDATE sessions SET principal_id = ?1, title = ?2, created_at = ?3, updated_at = ?4
+                 WHERE id = ?5",
+                params![
+                    session.principal_id.to_string(),
+                    session.title,
+                    session.created_at,
+                    session.updated_at,
+                    session.id.to_string(),
+                ],
+            )
+            .map_err(|e| e.to_string())?;
+        if n == 0 {
+            return Err(format!("session {} not found", session.id));
+        }
+        Ok(())
+    }
+
+    async fn list_sessions(&self) -> Result<Vec<Session>, String> {
+        let conn = self.conn.lock().map_err(|e| e.to_string())?;
+        let mut stmt = conn
+            .prepare(
+                "SELECT id, principal_id, title, created_at, updated_at FROM sessions
+                 ORDER BY updated_at DESC, id DESC",
+            )
+            .map_err(|e| e.to_string())?;
+        let mut rows = stmt.query([]).map_err(|e| e.to_string())?;
+        let mut out = Vec::new();
+        while let Some(row) = rows.next().map_err(|e| e.to_string())? {
+            out.push(row_to_session(row)?);
+        }
+        Ok(out)
     }
 
     async fn count_sessions(&self) -> Result<usize, String> {
@@ -348,6 +449,33 @@ impl SessionStore for SqliteSessionStore {
             }
             None => Ok(None),
         }
+    }
+
+    async fn list_runs_for_session(&self, session_id: SessionId) -> Result<Vec<Run>, String> {
+        let conn = self.conn.lock().map_err(|e| e.to_string())?;
+        let mut stmt = conn
+            .prepare(
+                "SELECT id, session_id, principal_id, goal, status, result, origin, parent_run_id
+                 FROM runs WHERE session_id = ?1",
+            )
+            .map_err(|e| e.to_string())?;
+        let mut rows = stmt
+            .query(params![session_id.to_string()])
+            .map_err(|e| e.to_string())?;
+        let mut out = Vec::new();
+        while let Some(row) = rows.next().map_err(|e| e.to_string())? {
+            out.push(row_to_run(
+                row.get(0).map_err(|e| e.to_string())?,
+                row.get(1).map_err(|e| e.to_string())?,
+                row.get(2).map_err(|e| e.to_string())?,
+                row.get(3).map_err(|e| e.to_string())?,
+                row.get(4).map_err(|e| e.to_string())?,
+                row.get(5).map_err(|e| e.to_string())?,
+                row.get(6).map_err(|e| e.to_string())?,
+                row.get(7).map_err(|e| e.to_string())?,
+            )?);
+        }
+        Ok(out)
     }
 
     async fn count_runs(&self) -> Result<usize, String> {

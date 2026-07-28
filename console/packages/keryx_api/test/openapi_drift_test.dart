@@ -31,10 +31,12 @@ void main() {
     openapi = doc as YamlMap;
   });
 
-  test('documents /health and /v1/providers', () {
+  test('documents /health, /v1/providers, and Session surfaces', () {
     final paths = openapi['paths'] as YamlMap;
     expect(paths.containsKey('/health'), isTrue);
     expect(paths.containsKey('/v1/providers'), isTrue);
+    expect(paths.containsKey('/v1/sessions'), isTrue);
+    expect(paths.containsKey('/v1/sessions/{session_id}'), isTrue);
   });
 
   test('health is unauthenticated getHealth', () {

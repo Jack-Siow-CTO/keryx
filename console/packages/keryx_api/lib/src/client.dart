@@ -92,6 +92,51 @@ class KeryxApiClient {
     return ProvidersResponse.fromJson(_decodeObject(response.body));
   }
 
+  /// `GET /v1/sessions` — operator Session list projection.
+  Future<SessionListResponse> listSessions() async {
+    final response = await _send(
+      method: 'GET',
+      path: '/v1/sessions',
+      authenticated: true,
+    );
+    return SessionListResponse.fromJson(_decodeObject(response.body));
+  }
+
+  /// `POST /v1/sessions` — create Session.
+  Future<SessionSummary> createSession() async {
+    final response = await _send(
+      method: 'POST',
+      path: '/v1/sessions',
+      authenticated: true,
+      body: <String, dynamic>{},
+    );
+    return SessionSummary.fromJson(_decodeObject(response.body));
+  }
+
+  /// `GET /v1/sessions/{id}`.
+  Future<SessionSummary> getSession(String sessionId) async {
+    final response = await _send(
+      method: 'GET',
+      path: '/v1/sessions/$sessionId',
+      authenticated: true,
+    );
+    return SessionSummary.fromJson(_decodeObject(response.body));
+  }
+
+  /// `PATCH /v1/sessions/{id}` — rename title (durable on Worker).
+  Future<SessionSummary> patchSessionTitle(
+    String sessionId, {
+    required String title,
+  }) async {
+    final response = await _send(
+      method: 'PATCH',
+      path: '/v1/sessions/$sessionId',
+      authenticated: true,
+      body: {'title': title},
+    );
+    return SessionSummary.fromJson(_decodeObject(response.body));
+  }
+
   Future<http.Response> _send({
     required String method,
     required String path,

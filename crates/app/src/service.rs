@@ -9,8 +9,9 @@ use crate::store::SessionStore;
 use crate::tools::{catalog_for_policy, summarize_tool_args, DenyAllTools, ToolError, ToolRuntime};
 use async_trait::async_trait;
 use keryx_domain::{
-    Approval, ApprovalId, ApprovalStatus, Policy, Principal, Run, RunEvent, RunEventKind, RunId,
-    RunOrigin, RunStatus, Schedule, ScheduleId, Session, SessionId, TranscriptMessage,
+    ActiveRootRunSummary, Approval, ApprovalId, ApprovalStatus, MessageRole, Policy, Principal,
+    Run, RunEvent, RunEventKind, RunId, RunOrigin, RunStatus, Schedule, ScheduleId, Session,
+    SessionId, SessionSummary, TranscriptMessage,
 };
 use std::collections::{BTreeSet, HashSet};
 use std::path::PathBuf;
@@ -120,6 +121,15 @@ where
 #[async_trait]
 pub trait ControlPlaneService: Send + Sync {
     async fn create_session(&self, principal: Principal) -> Result<Session, AppError>;
+    /// Operator Session list projection (title, active root, pending Approvals).
+    async fn list_sessions(&self) -> Result<Vec<SessionSummary>, AppError>;
+    async fn get_session(&self, session_id: SessionId) -> Result<SessionSummary, AppError>;
+    /// Rename Session title (durable on Worker). Empty title clears override.
+    async fn patch_session_title(
+        &self,
+        session_id: SessionId,
+        title: Option<String>,
+    ) -> Result<SessionSummary, AppError>;
     /// Start a Run with `origin=control_plane` (trusted control-plane API path).
     async fn start_run(
         &self,
@@ -194,6 +204,50 @@ where
         Ok(session)
     }
 
+    async fn list_sessions(&self) -> Result<Vec<SessionSummary>, AppError> {
+        let sessions = self.store.list_sessions().await.map_err(AppError::Store)?;
+        let mut out = Vec::with_capacity(sessions.len());
+        for session in sessions {
+            out.push(self.project_session(session).await?);
+        }
+        Ok(out)
+    }
+
+    async fn get_session(&self, session_id: SessionId) -> Result<SessionSummary, AppError> {
+        let session = self
+            .store
+            .get_session(session_id)
+            .await
+            .map_err(AppError::Store)?
+            .ok_or(AppError::SessionNotFound)?;
+        self.project_session(session).await
+    }
+
+    async fn patch_session_title(
+        &self,
+        session_id: SessionId,
+        title: Option<String>,
+    ) -> Result<SessionSummary, AppError> {
+        let mut session = self
+            .store
+            .get_session(session_id)
+            .await
+            .map_err(AppError::Store)?
+            .ok_or(AppError::SessionNotFound)?;
+        match title {
+            Some(t) => session.set_title(t),
+            None => {
+                session.title = None;
+                session.touch();
+            }
+        }
+        self.store
+            .update_session(session.clone())
+            .await
+            .map_err(AppError::Store)?;
+        self.project_session(session).await
+    }
+
     async fn start_run(
         &self,
         principal: Principal,
@@ -222,7 +276,7 @@ where
         provider: Option<String>,
         model_id: Option<String>,
     ) -> Result<Run, AppError> {
-        let session = self
+        let mut session = self
             .store
             .get_session(session_id)
             .await
@@ -250,6 +304,9 @@ where
                 .create_run(run.clone())
                 .await
                 .map_err(AppError::Store)?;
+            // Touch Session activity for list projection ordering.
+            session.touch();
+            let _ = self.store.update_session(session.clone()).await;
             let cancel = active.register(session.id, run.id);
             (run, cancel, principal_id)
         };
@@ -506,6 +563,83 @@ where
     S: SessionStore + 'static,
     M: ModelProvider + 'static,
 {
+    /// Build operator Session list/detail projection (ADR 0027).
+    async fn project_session(&self, session: Session) -> Result<SessionSummary, AppError> {
+        let runs = self
+            .store
+            .list_runs_for_session(session.id)
+            .await
+            .map_err(AppError::Store)?;
+        let transcript = self
+            .store
+            .get_transcript(session.id)
+            .await
+            .map_err(AppError::Store)?;
+        // Prefer ordered first user Transcript message (stable "first goal"),
+        // then any root Run goal as fallback.
+        let first_user = transcript
+            .messages
+            .iter()
+            .find(|m| m.role == MessageRole::User)
+            .map(|m| m.content.as_str());
+        let first_root_goal = runs
+            .iter()
+            .filter(|r| r.is_root())
+            .map(|r| r.goal.as_str())
+            .next();
+        let first_goal = first_user.or(first_root_goal);
+        let title_is_custom = session
+            .title
+            .as_ref()
+            .map(|s| !s.trim().is_empty())
+            .unwrap_or(false);
+        let title = session.display_title_with_goal(first_goal);
+
+        let active_root_run = runs
+            .iter()
+            .find(|r| r.is_root() && r.status == RunStatus::Active)
+            .map(|r| ActiveRootRunSummary {
+                id: r.id.to_string(),
+                goal: r.goal.clone(),
+                status: match r.status {
+                    RunStatus::Active => "active".into(),
+                    RunStatus::Completed => "completed".into(),
+                    RunStatus::Failed => "failed".into(),
+                    RunStatus::Cancelled => "cancelled".into(),
+                    RunStatus::Interrupted => "interrupted".into(),
+                },
+                origin: r.origin.as_str().to_string(),
+            });
+
+        let last_message_preview = transcript
+            .messages
+            .last()
+            .map(|m| truncate_preview(&m.content, 120));
+
+        let run_ids: std::collections::HashSet<_> = runs.iter().map(|r| r.id).collect();
+        let approvals = self
+            .store
+            .list_approvals(true)
+            .await
+            .map_err(AppError::Store)?;
+        let pending_approval_count = approvals
+            .iter()
+            .filter(|a| run_ids.contains(&a.run_id))
+            .count() as u32;
+
+        Ok(SessionSummary {
+            id: session.id.to_string(),
+            principal_id: session.principal_id.to_string(),
+            title,
+            title_is_custom,
+            created_at: session.created_at,
+            updated_at: session.updated_at,
+            last_message_preview,
+            active_root_run,
+            pending_approval_count,
+        })
+    }
+
     async fn spawn_child_run_inner(
         &self,
         parent_run_id: RunId,
@@ -1249,4 +1383,16 @@ async fn request_and_wait_approval<S: SessionStore>(
             }
         }
     }
+}
+
+fn truncate_preview(s: &str, max_chars: usize) -> String {
+    let mut out = String::new();
+    for (i, ch) in s.chars().enumerate() {
+        if i >= max_chars {
+            out.push('…');
+            break;
+        }
+        out.push(ch);
+    }
+    out
 }
