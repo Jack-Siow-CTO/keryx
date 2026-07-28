@@ -1,4 +1,4 @@
-use crate::SessionId;
+use crate::{RunId, SessionId};
 use serde::{Deserialize, Serialize};
 
 /// Role of a message in a Session Transcript.
@@ -12,40 +12,93 @@ pub enum MessageRole {
     Tool,
 }
 
-/// One message in a Session Transcript.
+/// Compact tool participation in Transcript (ADR 0025) — not unbounded dumps.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct ToolCompact {
+    pub name: String,
+    pub status: String,
+    pub summary: String,
+    #[serde(default)]
+    pub artifact_refs: Vec<String>,
+}
+
+/// One message in a Session Transcript (structured for Console).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TranscriptMessage {
+    /// Stable identity for paging / UI keys.
+    pub id: String,
+    /// Run that produced this message, when known.
+    pub run_id: Option<RunId>,
+    /// Unix seconds (UTC).
+    pub created_at: i64,
     pub role: MessageRole,
+    /// User/assistant prose, or short tool observation text.
     pub content: String,
+    /// Present when `role == Tool` (or tool-linked rows).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool: Option<ToolCompact>,
 }
 
 impl TranscriptMessage {
+    fn stamp(role: MessageRole, content: impl Into<String>) -> Self {
+        Self {
+            id: new_message_id(),
+            run_id: None,
+            created_at: unix_now(),
+            role,
+            content: content.into(),
+            tool: None,
+        }
+    }
+
     #[must_use]
     pub fn system(content: impl Into<String>) -> Self {
-        Self {
-            role: MessageRole::System,
-            content: content.into(),
-        }
+        Self::stamp(MessageRole::System, content)
     }
 
     #[must_use]
     pub fn user(content: impl Into<String>) -> Self {
-        Self {
-            role: MessageRole::User,
-            content: content.into(),
-        }
+        Self::stamp(MessageRole::User, content)
     }
 
     #[must_use]
     pub fn assistant(content: impl Into<String>) -> Self {
+        Self::stamp(MessageRole::Assistant, content)
+    }
+
+    #[must_use]
+    pub fn tool_compact(
+        name: impl Into<String>,
+        status: impl Into<String>,
+        summary: impl Into<String>,
+        artifact_refs: Vec<String>,
+    ) -> Self {
+        let name = name.into();
+        let status = status.into();
+        let summary = summary.into();
         Self {
-            role: MessageRole::Assistant,
-            content: content.into(),
+            id: new_message_id(),
+            run_id: None,
+            created_at: unix_now(),
+            role: MessageRole::Tool,
+            content: format!("{name}: {summary}"),
+            tool: Some(ToolCompact {
+                name,
+                status,
+                summary,
+                artifact_refs,
+            }),
         }
+    }
+
+    #[must_use]
+    pub fn with_run_id(mut self, run_id: RunId) -> Self {
+        self.run_id = Some(run_id);
+        self
     }
 }
 
-/// Ordered Session history available to subsequent Runs.
+/// Ordered Session history available to subsequent Runs and Console.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub struct Transcript {
     pub session_id: Option<SessionId>,
@@ -60,4 +113,38 @@ impl Transcript {
             messages: Vec::new(),
         }
     }
+}
+
+/// Reverse-chronological page for Console (latest first).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TranscriptPage {
+    pub session_id: String,
+    /// Messages newest-first for this page.
+    pub messages: Vec<TranscriptMessage>,
+    /// Pass as `before` to load older history; null when no more.
+    pub next_before: Option<String>,
+}
+
+fn unix_now() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
+}
+
+fn new_message_id() -> String {
+    // Time-sortable-ish id without extra deps: unix_ms-random.
+    let ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or(0);
+    let r: u32 = {
+        use std::collections::hash_map::DefaultHasher;
+        use std::hash::{Hash, Hasher};
+        let mut h = DefaultHasher::new();
+        ms.hash(&mut h);
+        std::thread::current().id().hash(&mut h);
+        (h.finish() as u32) ^ (ms as u32)
+    };
+    format!("tm-{ms:x}-{r:08x}")
 }

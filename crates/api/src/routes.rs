@@ -27,6 +27,7 @@ pub fn router(state: AppState) -> Router {
             "/v1/sessions/{session_id}",
             get(get_session).patch(patch_session),
         )
+        .route("/v1/sessions/{session_id}/transcript", get(get_transcript))
         .route("/v1/sessions/{session_id}/runs", post(start_run))
         .route("/v1/runs/{run_id}", get(get_run))
         .route("/v1/runs/{run_id}/cancel", post(cancel_run))
@@ -174,6 +175,81 @@ async fn create_session(
     // Return full projection for Console list consistency.
     let summary = state.control.get_session(session.id).await?;
     Ok((StatusCode::CREATED, Json(SessionResponse::from(summary))))
+}
+
+#[derive(Deserialize)]
+struct TranscriptQuery {
+    /// Max messages in page (default 50, max 200).
+    limit: Option<usize>,
+    /// Exclusive older-bound message id (scroll up for history).
+    before: Option<String>,
+}
+
+#[derive(Serialize)]
+struct TranscriptPageResponse {
+    session_id: String,
+    messages: Vec<TranscriptMessageResponse>,
+    next_before: Option<String>,
+}
+
+#[derive(Serialize)]
+struct TranscriptMessageResponse {
+    id: String,
+    run_id: Option<String>,
+    created_at: i64,
+    role: String,
+    content: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tool: Option<ToolCompactResponse>,
+}
+
+#[derive(Serialize)]
+struct ToolCompactResponse {
+    name: String,
+    status: String,
+    summary: String,
+    artifact_refs: Vec<String>,
+}
+
+async fn get_transcript(
+    State(state): State<AppState>,
+    AuthPrincipal(_principal): AuthPrincipal,
+    Path(session_id): Path<String>,
+    Query(q): Query<TranscriptQuery>,
+) -> Result<Json<TranscriptPageResponse>, ApiError> {
+    let session_id = SessionId::from_str(&session_id)
+        .map_err(|_| ApiError::bad_request("invalid session id"))?;
+    let limit = q.limit.unwrap_or(50).clamp(1, 200);
+    let page = state
+        .control
+        .get_transcript_page(session_id, limit, q.before)
+        .await?;
+    Ok(Json(TranscriptPageResponse {
+        session_id: page.session_id,
+        messages: page
+            .messages
+            .into_iter()
+            .map(|m| TranscriptMessageResponse {
+                id: m.id,
+                run_id: m.run_id.map(|id| id.to_string()),
+                created_at: m.created_at,
+                role: match m.role {
+                    keryx_domain::MessageRole::System => "system".into(),
+                    keryx_domain::MessageRole::User => "user".into(),
+                    keryx_domain::MessageRole::Assistant => "assistant".into(),
+                    keryx_domain::MessageRole::Tool => "tool".into(),
+                },
+                content: m.content,
+                tool: m.tool.map(|t| ToolCompactResponse {
+                    name: t.name,
+                    status: t.status,
+                    summary: t.summary,
+                    artifact_refs: t.artifact_refs,
+                }),
+            })
+            .collect(),
+        next_before: page.next_before,
+    }))
 }
 
 #[derive(Deserialize)]

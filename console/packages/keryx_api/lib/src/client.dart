@@ -137,6 +137,26 @@ class KeryxApiClient {
     return SessionSummary.fromJson(_decodeObject(response.body));
   }
 
+  /// `GET /v1/sessions/{id}/transcript` — reverse-chronological page.
+  Future<TranscriptPage> getTranscript(
+    String sessionId, {
+    int limit = 50,
+    String? before,
+  }) async {
+    final qp = <String, String>{'limit': '$limit'};
+    if (before != null) qp['before'] = before;
+    final path = Uri(
+      path: '/v1/sessions/$sessionId/transcript',
+      queryParameters: qp,
+    ).toString();
+    final response = await _send(
+      method: 'GET',
+      path: path,
+      authenticated: true,
+    );
+    return TranscriptPage.fromJson(_decodeObject(response.body));
+  }
+
   Future<http.Response> _send({
     required String method,
     required String path,

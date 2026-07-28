@@ -37,6 +37,7 @@ void main() {
     expect(paths.containsKey('/v1/providers'), isTrue);
     expect(paths.containsKey('/v1/sessions'), isTrue);
     expect(paths.containsKey('/v1/sessions/{session_id}'), isTrue);
+    expect(paths.containsKey('/v1/sessions/{session_id}/transcript'), isTrue);
   });
 
   test('health is unauthenticated getHealth', () {

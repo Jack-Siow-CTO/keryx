@@ -83,6 +83,40 @@ paths:
                 $ref: "#/components/schemas/SessionResponse"
         "401":
           $ref: "#/components/responses/Unauthorized"
+  /v1/sessions/{session_id}/transcript:
+    get:
+      tags: [Sessions]
+      operationId: getTranscript
+      summary: Paged structured Transcript (newest first)
+      description: |
+        Durable conversation SoR for Console. Tool rows are compact (name, status, summary, artifact_refs).
+        Pass `before` = oldest message id from previous page to scroll up for history.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/SessionId"
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 50
+            maximum: 200
+        - name: before
+          in: query
+          schema:
+            type: string
+          description: Exclusive older-bound message id
+      responses:
+        "200":
+          description: Transcript page
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TranscriptPage"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
   /v1/sessions/{session_id}:
     get:
       tags: [Sessions]
@@ -271,3 +305,53 @@ components:
         title:
           type: string
           description: Operator title override; empty clears to default
+    ToolCompact:
+      type: object
+      required: [name, status, summary]
+      properties:
+        name:
+          type: string
+        status:
+          type: string
+        summary:
+          type: string
+        artifact_refs:
+          type: array
+          items:
+            type: string
+    TranscriptMessage:
+      type: object
+      required: [id, created_at, role, content]
+      properties:
+        id:
+          type: string
+        run_id:
+          type: string
+          nullable: true
+        created_at:
+          type: integer
+          format: int64
+        role:
+          type: string
+          enum: [system, user, assistant, tool]
+        content:
+          type: string
+        tool:
+          nullable: true
+          allOf:
+            - $ref: "#/components/schemas/ToolCompact"
+    TranscriptPage:
+      type: object
+      required: [session_id, messages]
+      properties:
+        session_id:
+          type: string
+        messages:
+          type: array
+          items:
+            $ref: "#/components/schemas/TranscriptMessage"
+          description: Newest-first
+        next_before:
+          type: string
+          nullable: true
+

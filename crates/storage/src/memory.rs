@@ -101,6 +101,32 @@ impl SessionStore for InMemorySessionStore {
         })
     }
 
+    async fn get_transcript_page(
+        &self,
+        session_id: SessionId,
+        limit: usize,
+        before: Option<&str>,
+    ) -> Result<(Vec<TranscriptMessage>, Option<String>), String> {
+        let transcripts = self.transcripts.lock().map_err(|e| e.to_string())?;
+        let all = transcripts.get(&session_id).cloned().unwrap_or_default();
+        // Chronological storage → reverse for newest-first.
+        let mut rev: Vec<TranscriptMessage> = all.into_iter().rev().collect();
+        if let Some(before_id) = before {
+            if let Some(pos) = rev.iter().position(|m| m.id == before_id) {
+                rev = rev.split_off(pos + 1);
+            }
+        }
+        let limit = limit.max(1);
+        let page: Vec<TranscriptMessage> = rev.into_iter().take(limit).collect();
+        let next_before = if page.len() == limit {
+            page.last().map(|m| m.id.clone())
+        } else {
+            None
+        };
+        // If more remain after this page, next_before is the oldest id on this page.
+        Ok((page, next_before))
+    }
+
     async fn append_transcript(
         &self,
         session_id: SessionId,

@@ -22,6 +22,14 @@ pub trait SessionStore: Send + Sync {
     async fn count_runs(&self) -> Result<usize, String>;
 
     async fn get_transcript(&self, session_id: SessionId) -> Result<Transcript, String>;
+    /// Reverse-chronological page: newest first. `before` is exclusive upper bound message id
+    /// (load older than this id). When `before` is None, start from latest.
+    async fn get_transcript_page(
+        &self,
+        session_id: SessionId,
+        limit: usize,
+        before: Option<&str>,
+    ) -> Result<(Vec<TranscriptMessage>, Option<String>), String>;
     async fn append_transcript(
         &self,
         session_id: SessionId,

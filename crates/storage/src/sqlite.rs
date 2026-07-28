@@ -62,9 +62,16 @@ impl SqliteSessionStore {
             );
             CREATE TABLE IF NOT EXISTS transcript_messages (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
+                message_id TEXT NOT NULL DEFAULT '',
                 session_id TEXT NOT NULL,
+                run_id TEXT,
+                created_at INTEGER NOT NULL DEFAULT 0,
                 role TEXT NOT NULL,
                 content TEXT NOT NULL,
+                tool_name TEXT,
+                tool_status TEXT,
+                tool_summary TEXT,
+                artifact_refs TEXT,
                 FOREIGN KEY(session_id) REFERENCES sessions(id)
             );
             CREATE TABLE IF NOT EXISTS approvals (
@@ -167,6 +174,49 @@ impl SqliteSessionStore {
             "updated_at",
             "ALTER TABLE sessions ADD COLUMN updated_at INTEGER NOT NULL DEFAULT 0",
         )?;
+        // Structured Transcript (ADR 0025).
+        Self::ensure_column(
+            &conn,
+            "transcript_messages",
+            "message_id",
+            "ALTER TABLE transcript_messages ADD COLUMN message_id TEXT NOT NULL DEFAULT ''",
+        )?;
+        Self::ensure_column(
+            &conn,
+            "transcript_messages",
+            "run_id",
+            "ALTER TABLE transcript_messages ADD COLUMN run_id TEXT",
+        )?;
+        Self::ensure_column(
+            &conn,
+            "transcript_messages",
+            "created_at",
+            "ALTER TABLE transcript_messages ADD COLUMN created_at INTEGER NOT NULL DEFAULT 0",
+        )?;
+        Self::ensure_column(
+            &conn,
+            "transcript_messages",
+            "tool_name",
+            "ALTER TABLE transcript_messages ADD COLUMN tool_name TEXT",
+        )?;
+        Self::ensure_column(
+            &conn,
+            "transcript_messages",
+            "tool_status",
+            "ALTER TABLE transcript_messages ADD COLUMN tool_status TEXT",
+        )?;
+        Self::ensure_column(
+            &conn,
+            "transcript_messages",
+            "tool_summary",
+            "ALTER TABLE transcript_messages ADD COLUMN tool_summary TEXT",
+        )?;
+        Self::ensure_column(
+            &conn,
+            "transcript_messages",
+            "artifact_refs",
+            "ALTER TABLE transcript_messages ADD COLUMN artifact_refs TEXT",
+        )?;
         Ok(())
     }
 
@@ -208,6 +258,48 @@ impl SqliteSessionStore {
 
 fn parse_session_id(s: &str) -> Result<SessionId, String> {
     SessionId::from_str(s).map_err(|e| e.to_string())
+}
+
+fn row_to_transcript_message(row: &rusqlite::Row<'_>) -> Result<TranscriptMessage, String> {
+    use keryx_domain::ToolCompact;
+    let row_id: i64 = row.get(0).map_err(|e| e.to_string())?;
+    let message_id: String = row.get(1).map_err(|e| e.to_string())?;
+    let run_id: Option<String> = row.get(2).map_err(|e| e.to_string())?;
+    let created_at: i64 = row.get(3).map_err(|e| e.to_string())?;
+    let role: String = row.get(4).map_err(|e| e.to_string())?;
+    let content: String = row.get(5).map_err(|e| e.to_string())?;
+    let tool_name: Option<String> = row.get(6).map_err(|e| e.to_string())?;
+    let tool_status: Option<String> = row.get(7).map_err(|e| e.to_string())?;
+    let tool_summary: Option<String> = row.get(8).map_err(|e| e.to_string())?;
+    let artifact_refs_raw: Option<String> = row.get(9).map_err(|e| e.to_string())?;
+
+    let id = if message_id.is_empty() {
+        format!("row-{row_id}")
+    } else {
+        message_id
+    };
+    let tool = match (tool_name, tool_status, tool_summary) {
+        (Some(name), status, summary) => Some(ToolCompact {
+            name,
+            status: status.unwrap_or_else(|| "unknown".into()),
+            summary: summary.unwrap_or_default(),
+            artifact_refs: artifact_refs_raw
+                .and_then(|s| serde_json::from_str(&s).ok())
+                .unwrap_or_default(),
+        }),
+        _ => None,
+    };
+    Ok(TranscriptMessage {
+        id,
+        run_id: run_id
+            .filter(|s| !s.is_empty())
+            .map(|s| parse_run_id(&s))
+            .transpose()?,
+        created_at,
+        role: role_from_str(&role)?,
+        content,
+        tool,
+    })
 }
 
 fn row_to_session(row: &rusqlite::Row<'_>) -> Result<Session, String> {
@@ -490,30 +582,83 @@ impl SessionStore for SqliteSessionStore {
         let conn = self.conn.lock().map_err(|e| e.to_string())?;
         let mut stmt = conn
             .prepare(
-                "SELECT role, content FROM transcript_messages
+                "SELECT id, message_id, run_id, created_at, role, content,
+                        tool_name, tool_status, tool_summary, artifact_refs
+                 FROM transcript_messages
                  WHERE session_id = ?1 ORDER BY id ASC",
             )
             .map_err(|e| e.to_string())?;
-        let rows = stmt
-            .query_map(params![session_id.to_string()], |row| {
-                let role: String = row.get(0)?;
-                let content: String = row.get(1)?;
-                Ok((role, content))
-            })
+        let mut rows = stmt
+            .query(params![session_id.to_string()])
             .map_err(|e| e.to_string())?;
-
         let mut messages = Vec::new();
-        for row in rows {
-            let (role, content) = row.map_err(|e| e.to_string())?;
-            messages.push(TranscriptMessage {
-                role: role_from_str(&role)?,
-                content,
-            });
+        while let Some(row) = rows.next().map_err(|e| e.to_string())? {
+            messages.push(row_to_transcript_message(row)?);
         }
         Ok(Transcript {
             session_id: Some(session_id),
             messages,
         })
+    }
+
+    async fn get_transcript_page(
+        &self,
+        session_id: SessionId,
+        limit: usize,
+        before: Option<&str>,
+    ) -> Result<(Vec<TranscriptMessage>, Option<String>), String> {
+        let conn = self.conn.lock().map_err(|e| e.to_string())?;
+        let limit = limit.max(1) as i64;
+        // `before` is message_id of oldest on previous page; map to autoincrement id.
+        let before_row_id: Option<i64> = if let Some(before_id) = before {
+            conn.query_row(
+                "SELECT id FROM transcript_messages WHERE session_id = ?1 AND (message_id = ?2 OR CAST(id AS TEXT) = ?2) LIMIT 1",
+                params![session_id.to_string(), before_id],
+                |row| row.get(0),
+            )
+            .ok()
+        } else {
+            None
+        };
+
+        let sql = if before_row_id.is_some() {
+            "SELECT id, message_id, run_id, created_at, role, content,
+                    tool_name, tool_status, tool_summary, artifact_refs
+             FROM transcript_messages
+             WHERE session_id = ?1 AND id < ?2
+             ORDER BY id DESC LIMIT ?3"
+        } else {
+            "SELECT id, message_id, run_id, created_at, role, content,
+                    tool_name, tool_status, tool_summary, artifact_refs
+             FROM transcript_messages
+             WHERE session_id = ?1
+             ORDER BY id DESC LIMIT ?2"
+        };
+
+        let mut stmt = conn.prepare(sql).map_err(|e| e.to_string())?;
+        let mut messages = Vec::new();
+        if let Some(brid) = before_row_id {
+            let mut rows = stmt
+                .query(params![session_id.to_string(), brid, limit])
+                .map_err(|e| e.to_string())?;
+            while let Some(row) = rows.next().map_err(|e| e.to_string())? {
+                messages.push(row_to_transcript_message(row)?);
+            }
+        } else {
+            let mut rows = stmt
+                .query(params![session_id.to_string(), limit])
+                .map_err(|e| e.to_string())?;
+            while let Some(row) = rows.next().map_err(|e| e.to_string())? {
+                messages.push(row_to_transcript_message(row)?);
+            }
+        }
+
+        let next_before = if messages.len() as i64 == limit {
+            messages.last().map(|m| m.id.clone())
+        } else {
+            None
+        };
+        Ok((messages, next_before))
     }
 
     async fn append_transcript(
@@ -522,12 +667,26 @@ impl SessionStore for SqliteSessionStore {
         message: TranscriptMessage,
     ) -> Result<(), String> {
         let conn = self.conn.lock().map_err(|e| e.to_string())?;
+        let artifact_refs = message
+            .tool
+            .as_ref()
+            .map(|t| serde_json::to_string(&t.artifact_refs).unwrap_or_else(|_| "[]".into()));
         conn.execute(
-            "INSERT INTO transcript_messages (session_id, role, content) VALUES (?1, ?2, ?3)",
+            "INSERT INTO transcript_messages
+             (message_id, session_id, run_id, created_at, role, content,
+              tool_name, tool_status, tool_summary, artifact_refs)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
             params![
+                message.id,
                 session_id.to_string(),
+                message.run_id.map(|id| id.to_string()),
+                message.created_at,
                 role_to_str(&message.role),
                 message.content,
+                message.tool.as_ref().map(|t| t.name.clone()),
+                message.tool.as_ref().map(|t| t.status.clone()),
+                message.tool.as_ref().map(|t| t.summary.clone()),
+                artifact_refs,
             ],
         )
         .map_err(|e| e.to_string())?;
@@ -930,29 +1089,21 @@ impl SessionStore for SqliteSessionStore {
         let like = format!("%{}%", query);
         let mut stmt = conn
             .prepare(
-                "SELECT session_id, role, content FROM transcript_messages
+                "SELECT id, message_id, run_id, created_at, role, content,
+                        tool_name, tool_status, tool_summary, artifact_refs, session_id
+                 FROM transcript_messages
                  WHERE content LIKE ?1 ORDER BY id ASC LIMIT ?2",
             )
             .map_err(|e| e.to_string())?;
-        let rows = stmt
-            .query_map(params![like, limit.max(1) as i64], |row| {
-                Ok((
-                    row.get::<_, String>(0)?,
-                    row.get::<_, String>(1)?,
-                    row.get::<_, String>(2)?,
-                ))
-            })
+        let mut rows = stmt
+            .query(params![like, limit.max(1) as i64])
             .map_err(|e| e.to_string())?;
         let mut out = Vec::new();
-        for row in rows {
-            let (sid, role, content) = row.map_err(|e| e.to_string())?;
-            out.push((
-                parse_session_id(&sid)?,
-                TranscriptMessage {
-                    role: role_from_str(&role)?,
-                    content,
-                },
-            ));
+        while let Some(row) = rows.next().map_err(|e| e.to_string())? {
+            let sid: String = row.get(10).map_err(|e| e.to_string())?;
+            // Reuse row_to which expects cols 0..9
+            let msg = row_to_transcript_message(row)?;
+            out.push((parse_session_id(&sid)?, msg));
         }
         Ok(out)
     }

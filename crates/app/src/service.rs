@@ -130,6 +130,13 @@ pub trait ControlPlaneService: Send + Sync {
         session_id: SessionId,
         title: Option<String>,
     ) -> Result<SessionSummary, AppError>;
+    /// Paged Transcript (newest first). `before` = exclusive older-bound message id.
+    async fn get_transcript_page(
+        &self,
+        session_id: SessionId,
+        limit: usize,
+        before: Option<String>,
+    ) -> Result<keryx_domain::TranscriptPage, AppError>;
     /// Start a Run with `origin=control_plane` (trusted control-plane API path).
     async fn start_run(
         &self,
@@ -246,6 +253,30 @@ where
             .await
             .map_err(AppError::Store)?;
         self.project_session(session).await
+    }
+
+    async fn get_transcript_page(
+        &self,
+        session_id: SessionId,
+        limit: usize,
+        before: Option<String>,
+    ) -> Result<keryx_domain::TranscriptPage, AppError> {
+        let _ = self
+            .store
+            .get_session(session_id)
+            .await
+            .map_err(AppError::Store)?
+            .ok_or(AppError::SessionNotFound)?;
+        let (messages, next_before) = self
+            .store
+            .get_transcript_page(session_id, limit, before.as_deref())
+            .await
+            .map_err(AppError::Store)?;
+        Ok(keryx_domain::TranscriptPage {
+            session_id: session_id.to_string(),
+            messages,
+            next_before,
+        })
     }
 
     async fn start_run(
@@ -895,7 +926,10 @@ where
     // User goal is part of durable Transcript once the Run completes successfully;
     // append up front so tool steps and subsequent model calls see it.
     store
-        .append_transcript(session_id, TranscriptMessage::user(goal.clone()))
+        .append_transcript(
+            session_id,
+            TranscriptMessage::user(goal.clone()).with_run_id(run_id),
+        )
         .await
         .map_err(AppError::Store)?;
 
@@ -1068,7 +1102,7 @@ where
             store
                 .append_transcript(
                     session_id,
-                    TranscriptMessage::assistant(response.content.clone()),
+                    TranscriptMessage::assistant(response.content.clone()).with_run_id(run_id),
                 )
                 .await
                 .map_err(AppError::Store)?;
@@ -1149,10 +1183,13 @@ where
                     store
                         .append_transcript(
                             session_id,
-                            TranscriptMessage {
-                                role: keryx_domain::MessageRole::Tool,
-                                content: format!("{}: error={summary}", call.name),
-                            },
+                            TranscriptMessage::tool_compact(
+                                call.name.clone(),
+                                "error",
+                                summary,
+                                vec![],
+                            )
+                            .with_run_id(run_id),
                         )
                         .await
                         .map_err(AppError::Store)?;
@@ -1210,10 +1247,13 @@ where
                     store
                         .append_transcript(
                             session_id,
-                            TranscriptMessage {
-                                role: keryx_domain::MessageRole::Tool,
-                                content: format!("{}: {}", call.name, result.content),
-                            },
+                            TranscriptMessage::tool_compact(
+                                call.name.clone(),
+                                "ok",
+                                result.summary.clone(),
+                                vec![],
+                            )
+                            .with_run_id(run_id),
                         )
                         .await
                         .map_err(AppError::Store)?;
@@ -1227,10 +1267,13 @@ where
                     store
                         .append_transcript(
                             session_id,
-                            TranscriptMessage {
-                                role: keryx_domain::MessageRole::Tool,
-                                content: format!("{}: error={summary}", call.name),
-                            },
+                            TranscriptMessage::tool_compact(
+                                call.name.clone(),
+                                "error",
+                                summary,
+                                vec![],
+                            )
+                            .with_run_id(run_id),
                         )
                         .await
                         .map_err(AppError::Store)?;

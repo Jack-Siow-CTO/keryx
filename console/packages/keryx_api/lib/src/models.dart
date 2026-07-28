@@ -219,3 +219,93 @@ final class SessionListResponse {
     );
   }
 }
+
+/// Compact tool row in Transcript (ADR 0025).
+final class ToolCompact {
+  const ToolCompact({
+    required this.name,
+    required this.status,
+    required this.summary,
+    this.artifactRefs = const [],
+  });
+
+  final String name;
+  final String status;
+  final String summary;
+  final List<String> artifactRefs;
+
+  factory ToolCompact.fromJson(Map<String, dynamic> json) {
+    final refs = json['artifact_refs'];
+    return ToolCompact(
+      name: json['name'] as String,
+      status: json['status'] as String,
+      summary: json['summary'] as String? ?? '',
+      artifactRefs: refs is List
+          ? refs.whereType<String>().toList()
+          : const [],
+    );
+  }
+}
+
+/// Structured Transcript message (Console conversation SoR from Worker).
+final class TranscriptMessage {
+  const TranscriptMessage({
+    required this.id,
+    this.runId,
+    required this.createdAt,
+    required this.role,
+    required this.content,
+    this.tool,
+  });
+
+  final String id;
+  final String? runId;
+  final int createdAt;
+  final String role;
+  final String content;
+  final ToolCompact? tool;
+
+  bool get isTool => role == 'tool' || tool != null;
+
+  factory TranscriptMessage.fromJson(Map<String, dynamic> json) {
+    final tool = json['tool'];
+    return TranscriptMessage(
+      id: json['id'] as String,
+      runId: json['run_id'] as String?,
+      createdAt: (json['created_at'] as num).toInt(),
+      role: json['role'] as String,
+      content: json['content'] as String? ?? '',
+      tool: tool is Map
+          ? ToolCompact.fromJson(Map<String, dynamic>.from(tool))
+          : null,
+    );
+  }
+}
+
+final class TranscriptPage {
+  const TranscriptPage({
+    required this.sessionId,
+    required this.messages,
+    this.nextBefore,
+  });
+
+  final String sessionId;
+  /// Newest-first page.
+  final List<TranscriptMessage> messages;
+  final String? nextBefore;
+
+  factory TranscriptPage.fromJson(Map<String, dynamic> json) {
+    final raw = json['messages'];
+    if (raw is! List) {
+      throw const FormatException('TranscriptPage.messages must be a list');
+    }
+    return TranscriptPage(
+      sessionId: json['session_id'] as String,
+      messages: raw
+          .whereType<Map>()
+          .map((e) => TranscriptMessage.fromJson(Map<String, dynamic>.from(e)))
+          .toList(),
+      nextBefore: json['next_before'] as String?,
+    );
+  }
+}

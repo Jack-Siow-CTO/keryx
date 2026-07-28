@@ -24,7 +24,7 @@ pub use principal::{Principal, PrincipalId};
 pub use run::{Run, RunStatus};
 pub use schedule::{Schedule, ScheduleId, ScheduleStatus};
 pub use session::{ActiveRootRunSummary, Session, SessionSummary};
-pub use transcript::{MessageRole, Transcript, TranscriptMessage};
+pub use transcript::{MessageRole, ToolCompact, Transcript, TranscriptMessage, TranscriptPage};
 
 /// Workspace smoke: domain crate is loadable.
 #[must_use]

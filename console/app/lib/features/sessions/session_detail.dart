@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'sessions_controller.dart';
+import 'transcript_pane.dart';
 
 /// Session main pane shell: header chips for Active Run; Transcript later (#40).
 class SessionDetailPane extends ConsumerWidget {
@@ -83,20 +84,7 @@ class SessionDetailPane extends ConsumerWidget {
           ),
         ),
         const Divider(height: 1),
-        Expanded(
-          child: Center(
-            child: Padding(
-              padding: const EdgeInsets.all(24),
-              child: Text(
-                'Transcript conversation loads here in the next Console slice.',
-                textAlign: TextAlign.center,
-                style: theme.textTheme.bodyMedium?.copyWith(
-                  color: theme.colorScheme.onSurfaceVariant,
-                ),
-              ),
-            ),
-          ),
-        ),
+        const Expanded(child: SessionConversationBody()),
       ],
     );
   }
