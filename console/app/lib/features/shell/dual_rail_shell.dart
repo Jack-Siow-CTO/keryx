@@ -3,9 +3,13 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../theme/keryx_theme.dart';
 import '../auth/auth_controller.dart';
+import '../inbox/inbox_screen.dart';
+import '../memory/memory_screen.dart';
+import '../schedules/schedules_screen.dart';
 import '../sessions/session_detail.dart';
 import '../sessions/sessions_list.dart';
 import '../settings/settings_screen.dart';
+import '../skills/skills_screen.dart';
 
 /// Dual-rail home: Inbox + Sessions simultaneously on wide (ADR 0014, 0020).
 ///
@@ -45,13 +49,7 @@ class _DualRailShellState extends ConsumerState<DualRailShell> {
     return Scaffold(
       appBar: AppBar(
         title: const Text('Keryx Console'),
-        actions: [
-          IconButton(
-            tooltip: 'Settings',
-            icon: const Icon(Icons.settings_outlined),
-            onPressed: () => _openSettings(context),
-          ),
-        ],
+        actions: _consoleActions(context),
       ),
       body: Row(
         children: [
@@ -59,13 +57,7 @@ class _DualRailShellState extends ConsumerState<DualRailShell> {
             width: 280,
             child: Material(
               color: Theme.of(context).colorScheme.surfaceContainerLow,
-              child: const Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  _SectionTitle(title: 'Inbox'),
-                  Expanded(child: InboxPlaceholder()),
-                ],
-              ),
+              child: const InboxScreen(),
             ),
           ),
           const VerticalDivider(width: 1),
@@ -88,13 +80,7 @@ class _DualRailShellState extends ConsumerState<DualRailShell> {
     return Scaffold(
       appBar: AppBar(
         title: const Text('Keryx Console'),
-        actions: [
-          IconButton(
-            tooltip: 'Settings',
-            icon: const Icon(Icons.settings_outlined),
-            onPressed: () => _openSettings(context),
-          ),
-        ],
+        actions: _consoleActions(context),
       ),
       body: Row(
         children: [
@@ -118,7 +104,7 @@ class _DualRailShellState extends ConsumerState<DualRailShell> {
                   const Divider(height: 1),
                   Expanded(
                     child: _index == 0
-                        ? const InboxPlaceholder()
+                        ? const InboxScreen()
                         : const SessionsList(),
                   ),
                 ],
@@ -148,7 +134,7 @@ class _DualRailShellState extends ConsumerState<DualRailShell> {
         ),
       ),
       body: switch (_index) {
-        0 => const InboxPlaceholder(),
+        0 => const InboxScreen(),
         1 => SessionsList(
             onOpenSession: (id) => _pushSessionDetail(context),
           ),
@@ -178,6 +164,34 @@ class _DualRailShellState extends ConsumerState<DualRailShell> {
     );
   }
 
+  List<Widget> _consoleActions(BuildContext context) {
+    return [
+      PopupMenuButton<String>(
+        tooltip: 'More',
+        onSelected: (v) {
+          final page = switch (v) {
+            'memory' => const MemoryScreen(),
+            'schedules' => const SchedulesScreen(),
+            'skills' => const SkillsScreen(),
+            'settings' => const SettingsScreen(),
+            _ => null,
+          };
+          if (page != null) {
+            Navigator.of(context).push(
+              MaterialPageRoute<void>(builder: (_) => page),
+            );
+          }
+        },
+        itemBuilder: (context) => const [
+          PopupMenuItem(value: 'memory', child: Text('Memory')),
+          PopupMenuItem(value: 'schedules', child: Text('Schedules')),
+          PopupMenuItem(value: 'skills', child: Text('Skills')),
+          PopupMenuItem(value: 'settings', child: Text('Settings')),
+        ],
+      ),
+    ];
+  }
+
   void _openSettings(BuildContext context) {
     Navigator.of(context).push(
       MaterialPageRoute<void>(builder: (_) => const SettingsScreen()),
@@ -193,26 +207,6 @@ class _DualRailShellState extends ConsumerState<DualRailShell> {
             title: const Text('Session'),
           ),
           body: const SessionDetailPane(),
-        ),
-      ),
-    );
-  }
-}
-
-class _SectionTitle extends StatelessWidget {
-  const _SectionTitle({required this.title});
-
-  final String title;
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
-      child: Text(
-        title,
-        style: theme.textTheme.titleSmall?.copyWith(
-          fontWeight: FontWeight.w700,
         ),
       ),
     );
@@ -374,23 +368,26 @@ class MorePanel extends ConsumerWidget {
           subtitle: Text(baseUrl ?? ''),
           onTap: onOpenSettings,
         ),
-        const ListTile(
-          leading: Icon(Icons.memory_outlined),
-          title: Text('Memory'),
-          subtitle: Text('Coming in a later slice'),
-          enabled: false,
+        ListTile(
+          leading: const Icon(Icons.memory_outlined),
+          title: const Text('Memory'),
+          onTap: () => Navigator.of(context).push(
+            MaterialPageRoute<void>(builder: (_) => const MemoryScreen()),
+          ),
         ),
-        const ListTile(
-          leading: Icon(Icons.schedule_outlined),
-          title: Text('Schedules'),
-          subtitle: Text('Coming in a later slice'),
-          enabled: false,
+        ListTile(
+          leading: const Icon(Icons.schedule_outlined),
+          title: const Text('Schedules'),
+          onTap: () => Navigator.of(context).push(
+            MaterialPageRoute<void>(builder: (_) => const SchedulesScreen()),
+          ),
         ),
-        const ListTile(
-          leading: Icon(Icons.extension_outlined),
-          title: Text('Skills'),
-          subtitle: Text('Coming in a later slice'),
-          enabled: false,
+        ListTile(
+          leading: const Icon(Icons.extension_outlined),
+          title: const Text('Skills'),
+          onTap: () => Navigator.of(context).push(
+            MaterialPageRoute<void>(builder: (_) => const SkillsScreen()),
+          ),
         ),
       ],
     );

@@ -309,3 +309,211 @@ final class TranscriptPage {
     );
   }
 }
+
+/// Control-plane Run record.
+final class RunRecord {
+  const RunRecord({
+    required this.id,
+    required this.sessionId,
+    required this.principalId,
+    required this.goal,
+    required this.status,
+    required this.origin,
+    this.parentRunId,
+    this.result,
+  });
+
+  final String id;
+  final String sessionId;
+  final String principalId;
+  final String goal;
+  final String status;
+  final String origin;
+  final String? parentRunId;
+  final String? result;
+
+  bool get isActive => status == 'active';
+  bool get isTerminal =>
+      status == 'completed' ||
+      status == 'failed' ||
+      status == 'cancelled' ||
+      status == 'interrupted';
+
+  factory RunRecord.fromJson(Map<String, dynamic> json) => RunRecord(
+        id: json['id'] as String,
+        sessionId: json['session_id'] as String,
+        principalId: json['principal_id'] as String,
+        goal: json['goal'] as String,
+        status: json['status'] as String,
+        origin: json['origin'] as String? ?? 'control_plane',
+        parentRunId: json['parent_run_id'] as String?,
+        result: json['result'] as String?,
+      );
+}
+
+final class ApprovalRecord {
+  const ApprovalRecord({
+    required this.id,
+    required this.runId,
+    required this.action,
+    required this.summary,
+    required this.status,
+    required this.requestedBy,
+    this.decidedBy,
+  });
+
+  final String id;
+  final String runId;
+  final String action;
+  final String summary;
+  final String status;
+  final String requestedBy;
+  final String? decidedBy;
+
+  factory ApprovalRecord.fromJson(Map<String, dynamic> json) => ApprovalRecord(
+        id: json['id'] as String,
+        runId: json['run_id'] as String,
+        action: json['action'] as String,
+        summary: json['summary'] as String,
+        status: json['status'] as String,
+        requestedBy: json['requested_by'] as String,
+        decidedBy: json['decided_by'] as String?,
+      );
+}
+
+final class InboxItem {
+  const InboxItem({
+    required this.id,
+    required this.kind,
+    this.sessionId,
+    this.runId,
+    this.approvalId,
+    required this.title,
+    required this.summary,
+    required this.createdAt,
+  });
+
+  final String id;
+  final String kind;
+  final String? sessionId;
+  final String? runId;
+  final String? approvalId;
+  final String title;
+  final String summary;
+  final int createdAt;
+
+  factory InboxItem.fromJson(Map<String, dynamic> json) => InboxItem(
+        id: json['id'] as String,
+        kind: json['kind'] as String,
+        sessionId: json['session_id'] as String?,
+        runId: json['run_id'] as String?,
+        approvalId: json['approval_id'] as String?,
+        title: json['title'] as String,
+        summary: json['summary'] as String? ?? '',
+        createdAt: (json['created_at'] as num?)?.toInt() ?? 0,
+      );
+}
+
+final class MemoryEntry {
+  const MemoryEntry({
+    required this.id,
+    required this.content,
+    this.label,
+    this.sourceRunId,
+    this.sourcePrincipalId,
+  });
+
+  final String id;
+  final String content;
+  final String? label;
+  final String? sourceRunId;
+  final String? sourcePrincipalId;
+
+  factory MemoryEntry.fromJson(Map<String, dynamic> json) => MemoryEntry(
+        id: json['id'] as String,
+        content: json['content'] as String,
+        label: json['label'] as String?,
+        sourceRunId: json['source_run_id'] as String?,
+        sourcePrincipalId: json['source_principal_id'] as String?,
+      );
+}
+
+final class ScheduleRecord {
+  const ScheduleRecord({
+    required this.id,
+    required this.principalId,
+    this.sessionId,
+    required this.goal,
+    required this.intervalSecs,
+    required this.status,
+    required this.nextFireAt,
+  });
+
+  final String id;
+  final String principalId;
+  final String? sessionId;
+  final String goal;
+  final int intervalSecs;
+  final String status;
+  final int nextFireAt;
+
+  factory ScheduleRecord.fromJson(Map<String, dynamic> json) => ScheduleRecord(
+        id: json['id'] as String,
+        principalId: json['principal_id'] as String,
+        sessionId: json['session_id'] as String?,
+        goal: json['goal'] as String,
+        intervalSecs: (json['interval_secs'] as num).toInt(),
+        status: json['status'] as String,
+        nextFireAt: (json['next_fire_at'] as num).toInt(),
+      );
+}
+
+final class SkillSummary {
+  const SkillSummary({required this.name});
+  final String name;
+  factory SkillSummary.fromJson(Map<String, dynamic> json) =>
+      SkillSummary(name: json['name'] as String);
+}
+
+final class SkillDetail {
+  const SkillDetail({required this.name, required this.content});
+  final String name;
+  final String content;
+  factory SkillDetail.fromJson(Map<String, dynamic> json) => SkillDetail(
+        name: json['name'] as String,
+        content: json['content'] as String,
+      );
+}
+
+final class ArtifactMeta {
+  const ArtifactMeta({
+    required this.id,
+    required this.kind,
+    required this.mediaType,
+    required this.byteLen,
+    required this.createdAt,
+    this.runId,
+    this.sessionId,
+    required this.summary,
+  });
+
+  final String id;
+  final String kind;
+  final String mediaType;
+  final int byteLen;
+  final int createdAt;
+  final String? runId;
+  final String? sessionId;
+  final String summary;
+
+  factory ArtifactMeta.fromJson(Map<String, dynamic> json) => ArtifactMeta(
+        id: json['id'] as String,
+        kind: json['kind'] as String,
+        mediaType: json['media_type'] as String,
+        byteLen: (json['byte_len'] as num).toInt(),
+        createdAt: (json['created_at'] as num).toInt(),
+        runId: json['run_id'] as String?,
+        sessionId: json['session_id'] as String?,
+        summary: json['summary'] as String? ?? '',
+      );
+}

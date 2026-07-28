@@ -2,7 +2,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:keryx_api/keryx_api.dart';
 
+import '../artifacts/artifact_viewer.dart';
 import '../auth/auth_controller.dart';
+import 'session_run_controller.dart';
 import 'sessions_controller.dart';
 
 /// Conversation layer from durable Worker Transcript (ADR 0015, 0025).
@@ -39,6 +41,9 @@ class _TranscriptPaneState extends ConsumerState<TranscriptPane> {
       _loadInitial();
     }
   }
+
+  /// Public reload for Run terminal / reconnect (Worker Transcript SoR).
+  Future<void> reloadFromWorker() => _loadInitial();
 
   @override
   void dispose() {
@@ -281,9 +286,24 @@ class _ToolRow extends StatelessWidget {
                 Text(summary, style: theme.textTheme.bodySmall),
                 if (tool != null && tool.artifactRefs.isNotEmpty) ...[
                   const SizedBox(height: 6),
-                  Text(
-                    'Artifacts: ${tool.artifactRefs.join(", ")}',
-                    style: theme.textTheme.labelSmall,
+                  Wrap(
+                    spacing: 8,
+                    children: [
+                      for (final refId in tool.artifactRefs)
+                        ActionChip(
+                          label: Text(refId.length > 12
+                              ? '${refId.substring(0, 12)}…'
+                              : refId),
+                          onPressed: () {
+                            Navigator.of(context).push(
+                              MaterialPageRoute<void>(
+                                builder: (_) =>
+                                    ArtifactViewerPage(artifactId: refId),
+                              ),
+                            );
+                          },
+                        ),
+                    ],
                   ),
                 ],
               ],
@@ -296,15 +316,67 @@ class _ToolRow extends StatelessWidget {
 }
 
 /// Wire Transcript into Session detail when a Session is selected.
-class SessionConversationBody extends ConsumerWidget {
+class SessionConversationBody extends ConsumerStatefulWidget {
   const SessionConversationBody({super.key});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<SessionConversationBody> createState() =>
+      _SessionConversationBodyState();
+}
+
+class _SessionConversationBodyState
+    extends ConsumerState<SessionConversationBody> {
+  final _paneKey = GlobalKey<_TranscriptPaneState>();
+
+  @override
+  Widget build(BuildContext context) {
     final selected = ref.watch(sessionsControllerProvider).selectedId;
+
+    // Reload durable Transcript when Run leaves Active (Worker SoR).
+    ref.listen(sessionRunControllerProvider, (prev, next) {
+      final prevStatus = prev?.activeRun?.status;
+      final nextStatus = next.activeRun?.status;
+      if (prevStatus == 'active' &&
+          nextStatus != null &&
+          nextStatus != 'active') {
+        _paneKey.currentState?.reloadFromWorker();
+      }
+    });
+
     if (selected == null) {
       return const SizedBox.shrink();
     }
-    return TranscriptPane(sessionId: selected);
+
+    // Skill chips: tools skill_view / skill_load / skills_list in activity
+    final skillHints = ref
+        .watch(sessionRunControllerProvider)
+        .activity
+        .where((a) => a.contains('skill'))
+        .take(3)
+        .toList();
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        if (skillHints.isNotEmpty)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(12, 8, 12, 0),
+            child: Wrap(
+              spacing: 6,
+              children: [
+                for (final h in skillHints)
+                  Chip(
+                    label: Text(h, style: const TextStyle(fontSize: 11)),
+                    visualDensity: VisualDensity.compact,
+                    avatar: const Icon(Icons.extension, size: 14),
+                  ),
+              ],
+            ),
+          ),
+        Expanded(
+          child: TranscriptPane(key: _paneKey, sessionId: selected),
+        ),
+      ],
+    );
   }
 }

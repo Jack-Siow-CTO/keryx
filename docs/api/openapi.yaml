@@ -162,6 +162,119 @@ paths:
           $ref: "#/components/responses/Unauthorized"
         "404":
           $ref: "#/components/responses/NotFound"
+  /v1/inbox:
+    get:
+      tags: [Sessions]
+      operationId: listInbox
+      summary: Inbox projection
+      security: [{bearerAuth: []}]
+      responses:
+        "200":
+          description: Inbox items
+  /v1/memory:
+    get:
+      tags: [Sessions]
+      operationId: listMemory
+      security: [{bearerAuth: []}]
+      responses: {"200": {description: ok}}
+    post:
+      tags: [Sessions]
+      operationId: createMemory
+      security: [{bearerAuth: []}]
+      responses: {"201": {description: created}}
+  /v1/memory/{memory_id}:
+    get:
+      tags: [Sessions]
+      operationId: getMemory
+      security: [{bearerAuth: []}]
+      parameters: [{$ref: "#/components/parameters/SessionId"}]
+      responses: {"200": {description: ok}}
+    put:
+      tags: [Sessions]
+      operationId: updateMemory
+      security: [{bearerAuth: []}]
+      parameters: [{$ref: "#/components/parameters/SessionId"}]
+      responses: {"200": {description: ok}}
+    delete:
+      tags: [Sessions]
+      operationId: deleteMemory
+      security: [{bearerAuth: []}]
+      parameters: [{$ref: "#/components/parameters/SessionId"}]
+      responses: {"204": {description: deleted}}
+  /v1/skills:
+    get:
+      tags: [Sessions]
+      operationId: listSkills
+      security: [{bearerAuth: []}]
+      responses: {"200": {description: ok}}
+  /v1/skills/{name}:
+    get:
+      tags: [Sessions]
+      operationId: getSkill
+      security: [{bearerAuth: []}]
+      responses: {"200": {description: ok}}
+  /v1/artifacts/{artifact_id}:
+    get:
+      tags: [Sessions]
+      operationId: getArtifact
+      security: [{bearerAuth: []}]
+      responses: {"200": {description: ok}}
+  /v1/sessions/{session_id}/runs:
+    post:
+      tags: [Runs]
+      operationId: startRun
+      security: [{bearerAuth: []}]
+      parameters: [{$ref: "#/components/parameters/SessionId"}]
+      responses: {"201": {description: created}}
+  /v1/runs/{run_id}:
+    get:
+      tags: [Runs]
+      operationId: getRun
+      security: [{bearerAuth: []}]
+      responses: {"200": {description: ok}}
+  /v1/runs/{run_id}/cancel:
+    post:
+      tags: [Runs]
+      operationId: cancelRun
+      security: [{bearerAuth: []}]
+      responses: {"200": {description: ok}}
+  /v1/runs/{run_id}/events:
+    get:
+      tags: [Runs]
+      operationId: streamRunEvents
+      security: [{bearerAuth: []}]
+      responses: {"200": {description: SSE}}
+
+  /v1/schedules:
+    get:
+      tags: [Schedules]
+      operationId: listSchedules
+      security: [{bearerAuth: []}]
+      responses: {"200": {description: ok}}
+    post:
+      tags: [Schedules]
+      operationId: createSchedule
+      security: [{bearerAuth: []}]
+      responses: {"201": {description: created}}
+  /v1/schedules/{schedule_id}/pause:
+    post:
+      tags: [Schedules]
+      operationId: pauseSchedule
+      security: [{bearerAuth: []}]
+      responses: {"200": {description: ok}}
+  /v1/schedules/{schedule_id}/resume:
+    post:
+      tags: [Schedules]
+      operationId: resumeSchedule
+      security: [{bearerAuth: []}]
+      responses: {"200": {description: ok}}
+  /v1/schedules/{schedule_id}/delete:
+    post:
+      tags: [Schedules]
+      operationId: deleteSchedule
+      security: [{bearerAuth: []}]
+      responses: {"200": {description: ok}}
+
 components:
   securitySchemes:
     bearerAuth:

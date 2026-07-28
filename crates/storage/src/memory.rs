@@ -1,8 +1,8 @@
 use async_trait::async_trait;
 use keryx_app::SessionStore;
 use keryx_domain::{
-    Approval, ApprovalId, ApprovalStatus, MemoryEntry, MemoryId, Run, RunId, RunStatus, Schedule,
-    ScheduleId, Session, SessionId, Transcript, TranscriptMessage,
+    Approval, ApprovalId, ApprovalStatus, ArtifactId, ArtifactMeta, MemoryEntry, MemoryId, Run,
+    RunId, RunStatus, Schedule, ScheduleId, Session, SessionId, Transcript, TranscriptMessage,
 };
 use std::collections::HashMap;
 use std::sync::Mutex;
@@ -16,6 +16,7 @@ pub struct InMemorySessionStore {
     approvals: Mutex<HashMap<ApprovalId, Approval>>,
     memory: Mutex<HashMap<MemoryId, MemoryEntry>>,
     schedules: Mutex<HashMap<ScheduleId, Schedule>>,
+    artifacts: Mutex<HashMap<ArtifactId, ArtifactMeta>>,
 }
 
 impl InMemorySessionStore {
@@ -294,5 +295,16 @@ impl SessionStore for InMemorySessionStore {
             .collect();
         out.sort_by_key(|s| s.id.to_string());
         Ok(out)
+    }
+
+    async fn create_artifact_meta(&self, meta: ArtifactMeta) -> Result<(), String> {
+        let mut artifacts = self.artifacts.lock().map_err(|e| e.to_string())?;
+        artifacts.insert(meta.id, meta);
+        Ok(())
+    }
+
+    async fn get_artifact_meta(&self, id: ArtifactId) -> Result<Option<ArtifactMeta>, String> {
+        let artifacts = self.artifacts.lock().map_err(|e| e.to_string())?;
+        Ok(artifacts.get(&id).cloned())
     }
 }

@@ -9,9 +9,10 @@ use crate::store::SessionStore;
 use crate::tools::{catalog_for_policy, summarize_tool_args, DenyAllTools, ToolError, ToolRuntime};
 use async_trait::async_trait;
 use keryx_domain::{
-    ActiveRootRunSummary, Approval, ApprovalId, ApprovalStatus, MessageRole, Policy, Principal,
-    Run, RunEvent, RunEventKind, RunId, RunOrigin, RunStatus, Schedule, ScheduleId, Session,
-    SessionId, SessionSummary, TranscriptMessage,
+    ActiveRootRunSummary, Approval, ApprovalId, ApprovalStatus, ArtifactId, ArtifactMeta,
+    InboxItem, InboxItemKind, MemoryEntry, MemoryId, MessageRole, Policy, Principal, Run, RunEvent,
+    RunEventKind, RunId, RunOrigin, RunStatus, Schedule, ScheduleId, Session, SessionId,
+    SessionSummary, TranscriptMessage,
 };
 use std::collections::{BTreeSet, HashSet};
 use std::path::PathBuf;
@@ -194,6 +195,32 @@ pub trait ControlPlaneService: Send + Sync {
     async fn delete_schedule(&self, id: ScheduleId) -> Result<Schedule, AppError>;
     /// Fire due Schedules at `now` (deterministic clock for tests). Returns started Runs.
     async fn tick_schedules(&self, now: i64) -> Result<Vec<Run>, AppError>;
+
+    /// Inbox projection: pending Approvals + recent failed/interrupted root Runs (ADR 0028).
+    async fn list_inbox(&self, limit: usize) -> Result<Vec<InboxItem>, AppError>;
+
+    // Memory control-plane (same store as tools; Principal provenance) — ADR 0029.
+    async fn list_memory(&self) -> Result<Vec<MemoryEntry>, AppError>;
+    async fn search_memory(&self, query: &str, limit: usize) -> Result<Vec<MemoryEntry>, AppError>;
+    async fn get_memory(&self, id: MemoryId) -> Result<MemoryEntry, AppError>;
+    async fn create_memory(
+        &self,
+        principal: Principal,
+        content: String,
+        label: Option<String>,
+    ) -> Result<MemoryEntry, AppError>;
+    async fn update_memory(
+        &self,
+        principal: Principal,
+        id: MemoryId,
+        content: String,
+        label: Option<String>,
+    ) -> Result<MemoryEntry, AppError>;
+    async fn delete_memory(&self, id: MemoryId) -> Result<(), AppError>;
+
+    // Artifacts — metadata + store bytes path handled by API adapter.
+    async fn get_artifact_meta(&self, id: ArtifactId) -> Result<ArtifactMeta, AppError>;
+    async fn put_artifact_meta(&self, meta: ArtifactMeta) -> Result<(), AppError>;
 }
 
 #[async_trait]
@@ -586,6 +613,149 @@ where
 
     async fn deny(&self, principal: Principal, id: ApprovalId) -> Result<Approval, AppError> {
         self.decide_approval(principal, id, false).await
+    }
+
+    async fn list_inbox(&self, limit: usize) -> Result<Vec<InboxItem>, AppError> {
+        let limit = limit.clamp(1, 200);
+        let mut items = Vec::new();
+
+        let pending = self
+            .store
+            .list_approvals(true)
+            .await
+            .map_err(AppError::Store)?;
+        for a in pending {
+            let run = self
+                .store
+                .get_run(a.run_id)
+                .await
+                .map_err(AppError::Store)?;
+            let session_id = run.as_ref().map(|r| r.session_id.to_string());
+            items.push(InboxItem {
+                id: format!("approval:{}", a.id),
+                kind: InboxItemKind::ApprovalPending,
+                session_id,
+                run_id: Some(a.run_id.to_string()),
+                approval_id: Some(a.id.to_string()),
+                title: format!("Approval: {}", a.action),
+                summary: a.summary.clone(),
+                created_at: 0,
+            });
+        }
+
+        // Recent failed / interrupted root Runs across Sessions.
+        let sessions = self.store.list_sessions().await.map_err(AppError::Store)?;
+        for session in sessions {
+            let runs = self
+                .store
+                .list_runs_for_session(session.id)
+                .await
+                .map_err(AppError::Store)?;
+            for r in runs {
+                if !r.is_root() {
+                    continue;
+                }
+                let kind = match r.status {
+                    RunStatus::Failed => Some(InboxItemKind::RunFailed),
+                    RunStatus::Interrupted => Some(InboxItemKind::RunInterrupted),
+                    _ => None,
+                };
+                if let Some(kind) = kind {
+                    items.push(InboxItem {
+                        id: format!("run:{}", r.id),
+                        kind,
+                        session_id: Some(session.id.to_string()),
+                        run_id: Some(r.id.to_string()),
+                        approval_id: None,
+                        title: match kind {
+                            InboxItemKind::RunFailed => "Run failed".into(),
+                            InboxItemKind::RunInterrupted => "Run interrupted".into(),
+                            InboxItemKind::ApprovalPending => unreachable!(),
+                        },
+                        summary: r.result.clone().unwrap_or_else(|| r.goal.clone()),
+                        created_at: 0,
+                    });
+                }
+            }
+        }
+
+        items.truncate(limit);
+        Ok(items)
+    }
+
+    async fn list_memory(&self) -> Result<Vec<MemoryEntry>, AppError> {
+        self.store.list_memory().await.map_err(AppError::Store)
+    }
+
+    async fn search_memory(&self, query: &str, limit: usize) -> Result<Vec<MemoryEntry>, AppError> {
+        self.store
+            .search_memory(query, limit)
+            .await
+            .map_err(AppError::Store)
+    }
+
+    async fn get_memory(&self, id: MemoryId) -> Result<MemoryEntry, AppError> {
+        self.store
+            .get_memory(id)
+            .await
+            .map_err(AppError::Store)?
+            .ok_or(AppError::MemoryNotFound)
+    }
+
+    async fn create_memory(
+        &self,
+        principal: Principal,
+        content: String,
+        label: Option<String>,
+    ) -> Result<MemoryEntry, AppError> {
+        if content.trim().is_empty() {
+            return Err(AppError::Store("memory content must not be empty".into()));
+        }
+        let mut entry = MemoryEntry::new(content);
+        entry.label = label;
+        entry.source_principal_id = Some(principal.id);
+        self.store
+            .create_memory(entry.clone())
+            .await
+            .map_err(AppError::Store)?;
+        Ok(entry)
+    }
+
+    async fn update_memory(
+        &self,
+        principal: Principal,
+        id: MemoryId,
+        content: String,
+        label: Option<String>,
+    ) -> Result<MemoryEntry, AppError> {
+        let mut entry = self.get_memory(id).await?;
+        entry.content = content;
+        entry.label = label;
+        entry.source_principal_id = Some(principal.id);
+        self.store
+            .update_memory(entry.clone())
+            .await
+            .map_err(AppError::Store)?;
+        Ok(entry)
+    }
+
+    async fn delete_memory(&self, id: MemoryId) -> Result<(), AppError> {
+        self.store.delete_memory(id).await.map_err(AppError::Store)
+    }
+
+    async fn get_artifact_meta(&self, id: ArtifactId) -> Result<ArtifactMeta, AppError> {
+        self.store
+            .get_artifact_meta(id)
+            .await
+            .map_err(AppError::Store)?
+            .ok_or(AppError::ArtifactNotFound)
+    }
+
+    async fn put_artifact_meta(&self, meta: ArtifactMeta) -> Result<(), AppError> {
+        self.store
+            .create_artifact_meta(meta)
+            .await
+            .map_err(AppError::Store)
     }
 }
 
@@ -1244,6 +1414,45 @@ where
                     publish(RunEventKind::ToolFinished {
                         name: format!("{}: {}", call.name, result.summary),
                     })?;
+                    // Compact tool row; large outputs become Artifact refs when possible.
+                    let mut artifact_refs = Vec::new();
+                    if result.content.len() > 240
+                        || matches!(
+                            call.name.as_str(),
+                            "run_terminal" | "shell_exec" | "apply_patch"
+                        )
+                    {
+                        let kind = if call.name.contains("patch") {
+                            keryx_domain::ArtifactKind::Diff
+                        } else if matches!(
+                            call.name.as_str(),
+                            "run_terminal" | "shell_exec"
+                        ) {
+                            keryx_domain::ArtifactKind::Terminal
+                        } else {
+                            keryx_domain::ArtifactKind::Text
+                        };
+                        let now = std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .map(|d| d.as_secs() as i64)
+                            .unwrap_or(0);
+                        let meta = keryx_domain::ArtifactMeta {
+                            id: keryx_domain::ArtifactId::new(),
+                            kind,
+                            media_type: "text/plain".into(),
+                            byte_len: result.content.len() as u64,
+                            created_at: now,
+                            run_id: Some(run_id.to_string()),
+                            session_id: Some(session_id.to_string()),
+                            summary: result.summary.clone(),
+                            content_text: Some(result.content.clone()),
+                        };
+                        // Persist meta; blob file is best-effort via summary embed for Console.
+                        // Full blob path uses Worker artifacts_dir + PUT only in tests.
+                        if store.create_artifact_meta(meta.clone()).await.is_ok() {
+                            artifact_refs.push(meta.id.to_string());
+                        }
+                    }
                     store
                         .append_transcript(
                             session_id,
@@ -1251,7 +1460,7 @@ where
                                 call.name.clone(),
                                 "ok",
                                 result.summary.clone(),
-                                vec![],
+                                artifact_refs,
                             )
                             .with_run_id(run_id),
                         )

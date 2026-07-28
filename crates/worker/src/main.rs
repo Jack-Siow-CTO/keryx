@@ -122,7 +122,13 @@ async fn run() -> Result<(), String> {
     let catalog = catalog_from_registered(&registered);
     // Keep a direct Arc for Gateways (HTTP holds its own clone via AppState).
     let control_for_gateway = Arc::clone(&control);
-    let state = AppState::with_providers(control, tokens, catalog);
+    let skills_root = std::env::var("KERYX_SKILLS_ROOT")
+        .ok()
+        .map(std::path::PathBuf::from)
+        .or_else(|| Some(std::path::PathBuf::from("./skills")));
+    let artifacts_dir = Some(config.data_dir.join("artifacts"));
+    let state = AppState::with_providers(control, tokens, catalog)
+        .with_console_paths(skills_root, artifacts_dir);
     let app = router(state);
 
     // Telegram Gateway long-poll (optional; fail closed if token invalid at getMe).

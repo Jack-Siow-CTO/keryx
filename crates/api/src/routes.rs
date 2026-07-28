@@ -2,14 +2,17 @@ use crate::auth::AuthPrincipal;
 use crate::error::ApiError;
 use crate::state::AppState;
 use axum::extract::{Path, Query, State};
+use axum::http::header;
 use axum::http::StatusCode;
 use axum::response::sse::{Event, KeepAlive, Sse};
+use axum::response::IntoResponse;
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use futures_util::stream::{self, Stream, StreamExt};
 use keryx_domain::{
-    ActiveRootRunSummary, Approval, ApprovalId, ApprovalStatus, Run, RunEvent, RunId, RunStatus,
-    Schedule, ScheduleId, ScheduleStatus, Session, SessionId, SessionSummary,
+    ActiveRootRunSummary, Approval, ApprovalId, ApprovalStatus, ArtifactId, ArtifactKind,
+    ArtifactMeta, InboxItem, MemoryEntry, MemoryId, Run, RunEvent, RunId, RunStatus, Schedule,
+    ScheduleId, ScheduleStatus, Session, SessionId, SessionSummary,
 };
 use serde::{Deserialize, Serialize};
 use std::convert::Infallible;
@@ -20,7 +23,8 @@ use tokio_stream::wrappers::BroadcastStream;
 
 /// Build the control-plane router (health is unauthenticated; all `/v1/*` require bearer auth).
 pub fn router(state: AppState) -> Router {
-    Router::new()
+    let allow_put = state.allow_artifact_put;
+    let mut r = Router::new()
         .route("/health", get(health))
         .route("/v1/sessions", get(list_sessions).post(create_session))
         .route(
@@ -44,7 +48,27 @@ pub fn router(state: AppState) -> Router {
         .route("/v1/schedules/{schedule_id}/resume", post(resume_schedule))
         .route("/v1/schedules/{schedule_id}/delete", post(delete_schedule))
         .route("/v1/schedules/tick", post(tick_schedules))
-        .with_state(state)
+        .route("/v1/inbox", get(list_inbox))
+        .route("/v1/memory", get(list_or_search_memory).post(create_memory))
+        .route(
+            "/v1/memory/{memory_id}",
+            get(get_memory).put(update_memory).delete(delete_memory),
+        )
+        .route("/v1/skills", get(list_skills))
+        .route("/v1/skills/{name}", get(get_skill))
+        .route("/v1/artifacts/{artifact_id}", get(get_artifact));
+    if allow_put {
+        r = r.route(
+            "/v1/artifacts/{artifact_id}",
+            post(put_artifact_test_double),
+        );
+    }
+    r.with_state(state)
+}
+
+/// Seam 1 helper: production routes + Artifact POST enabled.
+pub fn router_with_artifact_put(state: AppState) -> Router {
+    router(state.with_artifact_put(true))
 }
 
 #[derive(Serialize)]
@@ -550,6 +574,318 @@ async fn tick_schedules(
     Ok(Json(TickSchedulesResponse {
         started_runs: runs.into_iter().map(Into::into).collect(),
     }))
+}
+
+// --- Inbox (ADR 0028) ---
+
+#[derive(Deserialize)]
+struct InboxQuery {
+    limit: Option<usize>,
+}
+
+#[derive(Serialize)]
+struct InboxResponse {
+    items: Vec<InboxItem>,
+}
+
+async fn list_inbox(
+    State(state): State<AppState>,
+    AuthPrincipal(_principal): AuthPrincipal,
+    Query(q): Query<InboxQuery>,
+) -> Result<Json<InboxResponse>, ApiError> {
+    let items = state.control.list_inbox(q.limit.unwrap_or(50)).await?;
+    Ok(Json(InboxResponse { items }))
+}
+
+// --- Memory (ADR 0029) ---
+
+#[derive(Deserialize)]
+struct MemoryQuery {
+    q: Option<String>,
+    limit: Option<usize>,
+}
+
+#[derive(Serialize)]
+struct MemoryListResponse {
+    entries: Vec<MemoryEntryResponse>,
+}
+
+#[derive(Serialize)]
+struct MemoryEntryResponse {
+    id: String,
+    content: String,
+    label: Option<String>,
+    source_run_id: Option<String>,
+    source_principal_id: Option<String>,
+}
+
+impl From<MemoryEntry> for MemoryEntryResponse {
+    fn from(e: MemoryEntry) -> Self {
+        Self {
+            id: e.id.to_string(),
+            content: e.content,
+            label: e.label,
+            source_run_id: e.source_run_id.map(|id| id.to_string()),
+            source_principal_id: e.source_principal_id.map(|id| id.to_string()),
+        }
+    }
+}
+
+#[derive(Deserialize)]
+struct MemoryWriteRequest {
+    content: String,
+    label: Option<String>,
+}
+
+async fn list_or_search_memory(
+    State(state): State<AppState>,
+    AuthPrincipal(_principal): AuthPrincipal,
+    Query(q): Query<MemoryQuery>,
+) -> Result<Json<MemoryListResponse>, ApiError> {
+    let entries = if let Some(query) = q.q.filter(|s| !s.trim().is_empty()) {
+        state
+            .control
+            .search_memory(&query, q.limit.unwrap_or(50))
+            .await?
+    } else {
+        state.control.list_memory().await?
+    };
+    Ok(Json(MemoryListResponse {
+        entries: entries.into_iter().map(Into::into).collect(),
+    }))
+}
+
+async fn create_memory(
+    State(state): State<AppState>,
+    AuthPrincipal(principal): AuthPrincipal,
+    Json(body): Json<MemoryWriteRequest>,
+) -> Result<(StatusCode, Json<MemoryEntryResponse>), ApiError> {
+    let entry = state
+        .control
+        .create_memory(principal, body.content, body.label)
+        .await?;
+    Ok((StatusCode::CREATED, Json(entry.into())))
+}
+
+async fn get_memory(
+    State(state): State<AppState>,
+    AuthPrincipal(_principal): AuthPrincipal,
+    Path(memory_id): Path<String>,
+) -> Result<Json<MemoryEntryResponse>, ApiError> {
+    let id =
+        MemoryId::from_str(&memory_id).map_err(|_| ApiError::bad_request("invalid memory id"))?;
+    Ok(Json(state.control.get_memory(id).await?.into()))
+}
+
+async fn update_memory(
+    State(state): State<AppState>,
+    AuthPrincipal(principal): AuthPrincipal,
+    Path(memory_id): Path<String>,
+    Json(body): Json<MemoryWriteRequest>,
+) -> Result<Json<MemoryEntryResponse>, ApiError> {
+    let id =
+        MemoryId::from_str(&memory_id).map_err(|_| ApiError::bad_request("invalid memory id"))?;
+    Ok(Json(
+        state
+            .control
+            .update_memory(principal, id, body.content, body.label)
+            .await?
+            .into(),
+    ))
+}
+
+async fn delete_memory(
+    State(state): State<AppState>,
+    AuthPrincipal(_principal): AuthPrincipal,
+    Path(memory_id): Path<String>,
+) -> Result<StatusCode, ApiError> {
+    let id =
+        MemoryId::from_str(&memory_id).map_err(|_| ApiError::bad_request("invalid memory id"))?;
+    state.control.delete_memory(id).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+// --- Skills read-mostly (ADR 0030) ---
+
+#[derive(Serialize)]
+struct SkillsListResponse {
+    skills: Vec<SkillSummaryResponse>,
+}
+
+#[derive(Serialize)]
+struct SkillSummaryResponse {
+    name: String,
+}
+
+#[derive(Serialize)]
+struct SkillDetailResponse {
+    name: String,
+    content: String,
+}
+
+async fn list_skills(
+    State(state): State<AppState>,
+    AuthPrincipal(_principal): AuthPrincipal,
+) -> Result<Json<SkillsListResponse>, ApiError> {
+    let Some(root) = state.skills_root.as_ref() else {
+        return Ok(Json(SkillsListResponse { skills: vec![] }));
+    };
+    let mut skills = Vec::new();
+    if let Ok(rd) = std::fs::read_dir(root) {
+        for ent in rd.flatten() {
+            if ent.path().is_dir() {
+                let name = ent.file_name().to_string_lossy().to_string();
+                if ent.path().join("SKILL.md").is_file() {
+                    skills.push(SkillSummaryResponse { name });
+                }
+            }
+        }
+    }
+    skills.sort_by(|a, b| a.name.cmp(&b.name));
+    Ok(Json(SkillsListResponse { skills }))
+}
+
+async fn get_skill(
+    State(state): State<AppState>,
+    AuthPrincipal(_principal): AuthPrincipal,
+    Path(name): Path<String>,
+) -> Result<Json<SkillDetailResponse>, ApiError> {
+    if name.contains('/') || name.contains("..") || name.is_empty() {
+        return Err(ApiError::bad_request("invalid skill name"));
+    }
+    let Some(root) = state.skills_root.as_ref() else {
+        return Err(ApiError::not_found("skills root not configured"));
+    };
+    let path = root.join(&name).join("SKILL.md");
+    let content = std::fs::read_to_string(&path)
+        .map_err(|_| ApiError::not_found(format!("skill not found: {name}")))?;
+    Ok(Json(SkillDetailResponse { name, content }))
+}
+
+// --- Artifacts (ADR 0026) ---
+
+#[derive(Serialize)]
+struct ArtifactMetaResponse {
+    id: String,
+    kind: String,
+    media_type: String,
+    byte_len: u64,
+    created_at: i64,
+    run_id: Option<String>,
+    session_id: Option<String>,
+    summary: String,
+}
+
+impl From<ArtifactMeta> for ArtifactMetaResponse {
+    fn from(m: ArtifactMeta) -> Self {
+        Self {
+            id: m.id.to_string(),
+            kind: m.kind.as_str().to_string(),
+            media_type: m.media_type,
+            byte_len: m.byte_len,
+            created_at: m.created_at,
+            run_id: m.run_id,
+            session_id: m.session_id,
+            summary: m.summary,
+        }
+    }
+}
+
+/// GET metadata as JSON when Accept is application/json; otherwise raw bytes.
+async fn get_artifact(
+    State(state): State<AppState>,
+    AuthPrincipal(_principal): AuthPrincipal,
+    Path(artifact_id): Path<String>,
+    headers: axum::http::HeaderMap,
+) -> Result<axum::response::Response, ApiError> {
+    let id = ArtifactId::from_str(&artifact_id)
+        .map_err(|_| ApiError::bad_request("invalid artifact id"))?;
+    let meta = state.control.get_artifact_meta(id).await?;
+    let want_json = headers
+        .get(header::ACCEPT)
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|s| s.contains("application/json"));
+    if want_json {
+        return Ok(Json(ArtifactMetaResponse::from(meta)).into_response());
+    }
+    let bytes = if let Some(text) = meta.content_text.as_ref() {
+        text.clone().into_bytes()
+    } else if let Some(dir) = state.artifacts_dir.as_ref() {
+        let path = dir.join(format!("{artifact_id}.bin"));
+        std::fs::read(&path).unwrap_or_else(|_| meta.summary.clone().into_bytes())
+    } else {
+        meta.summary.clone().into_bytes()
+    };
+    Ok((
+        [
+            (header::CONTENT_TYPE, meta.media_type),
+            (header::CONTENT_LENGTH, bytes.len().to_string()),
+        ],
+        bytes,
+    )
+        .into_response())
+}
+
+/// Test/seam helper: create Artifact metadata + blob under data dir.
+/// Production tools write via Worker adapters; Console only GETs.
+#[derive(Deserialize)]
+struct PutArtifactRequest {
+    kind: String,
+    media_type: Option<String>,
+    summary: Option<String>,
+    content_base64: Option<String>,
+    content_text: Option<String>,
+    run_id: Option<String>,
+    session_id: Option<String>,
+}
+
+async fn put_artifact_test_double(
+    State(state): State<AppState>,
+    AuthPrincipal(_principal): AuthPrincipal,
+    Path(artifact_id): Path<String>,
+    Json(body): Json<PutArtifactRequest>,
+) -> Result<(StatusCode, Json<ArtifactMetaResponse>), ApiError> {
+    let id = if artifact_id == "new" {
+        ArtifactId::new()
+    } else {
+        ArtifactId::from_str(&artifact_id)
+            .map_err(|_| ApiError::bad_request("invalid artifact id"))?
+    };
+    let kind = ArtifactKind::parse(&body.kind)
+        .ok_or_else(|| ApiError::bad_request("invalid artifact kind"))?;
+    let bytes = body
+        .content_text
+        .unwrap_or_else(|| body.content_base64.unwrap_or_default())
+        .into_bytes();
+    let media_type = body.media_type.unwrap_or_else(|| match kind {
+        ArtifactKind::Image => "image/png".into(),
+        ArtifactKind::Json => "application/json".into(),
+        ArtifactKind::Diff => "text/x-diff".into(),
+        ArtifactKind::Terminal | ArtifactKind::Text => "text/plain".into(),
+    });
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
+    let text = String::from_utf8_lossy(&bytes).to_string();
+    let meta = ArtifactMeta {
+        id,
+        kind,
+        media_type,
+        byte_len: bytes.len() as u64,
+        created_at: now,
+        run_id: body.run_id,
+        session_id: body.session_id,
+        summary: body.summary.unwrap_or_else(|| kind.as_str().into()),
+        content_text: Some(text),
+    };
+    if let Some(dir) = state.artifacts_dir.as_ref() {
+        std::fs::create_dir_all(dir).map_err(|e| ApiError::internal(e.to_string()))?;
+        std::fs::write(dir.join(format!("{id}.bin")), &bytes)
+            .map_err(|e| ApiError::internal(e.to_string()))?;
+    }
+    state.control.put_artifact_meta(meta.clone()).await?;
+    Ok((StatusCode::CREATED, Json(meta.into())))
 }
 
 type LiveStream = Pin<Box<dyn Stream<Item = RunEvent> + Send>>;

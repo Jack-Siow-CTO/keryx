@@ -1,7 +1,7 @@
 use async_trait::async_trait;
 use keryx_domain::{
-    Approval, ApprovalId, MemoryEntry, MemoryId, Run, RunId, Schedule, ScheduleId, Session,
-    SessionId, Transcript, TranscriptMessage,
+    Approval, ApprovalId, ArtifactId, ArtifactMeta, MemoryEntry, MemoryId, Run, RunId, Schedule,
+    ScheduleId, Session, SessionId, Transcript, TranscriptMessage,
 };
 
 /// Persistence port for Sessions, Runs, Transcripts, and Approvals (in-memory or `SQLite`).
@@ -67,4 +67,8 @@ pub trait SessionStore: Send + Sync {
     async fn update_schedule(&self, schedule: Schedule) -> Result<(), String>;
     async fn get_schedule(&self, id: ScheduleId) -> Result<Option<Schedule>, String>;
     async fn list_schedules(&self) -> Result<Vec<Schedule>, String>;
+
+    // --- Artifacts (metadata; bytes via ArtifactStore port / API layer) ---
+    async fn create_artifact_meta(&self, meta: ArtifactMeta) -> Result<(), String>;
+    async fn get_artifact_meta(&self, id: ArtifactId) -> Result<Option<ArtifactMeta>, String>;
 }

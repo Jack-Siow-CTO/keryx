@@ -60,7 +60,6 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(find.byType(DualRailShell), findsOneWidget);
-      expect(find.byType(InboxPlaceholder), findsOneWidget);
       // Sessions rail is live list (may show empty/loading/error without Worker).
       expect(find.text('Sessions'), findsWidgets);
       expect(find.text('Inbox'), findsWidgets);

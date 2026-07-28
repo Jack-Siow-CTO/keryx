@@ -58,7 +58,9 @@ impl From<AppError> for ApiError {
             AppError::SessionNotFound
             | AppError::RunNotFound
             | AppError::ApprovalNotFound
-            | AppError::ScheduleNotFound => Self::not_found(value.to_string()),
+            | AppError::ScheduleNotFound
+            | AppError::MemoryNotFound
+            | AppError::ArtifactNotFound => Self::not_found(value.to_string()),
             AppError::ActiveRunExists { .. }
             | AppError::GlobalCapExceeded { .. }
             | AppError::RunNotActive

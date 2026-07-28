@@ -24,6 +24,10 @@ pub enum AppError {
     ApprovalNotPending,
     #[error("schedule not found")]
     ScheduleNotFound,
+    #[error("memory not found")]
+    MemoryNotFound,
+    #[error("artifact not found")]
+    ArtifactNotFound,
     #[error("store error: {0}")]
     Store(String),
     #[error("model provider error: {0}")]

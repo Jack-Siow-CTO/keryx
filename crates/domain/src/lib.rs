@@ -3,8 +3,10 @@
 //! This crate has no I/O, HTTP, `SQLite`, or provider SDKs (ADR 0008).
 
 mod approval;
+mod artifact;
 mod events;
 mod ids;
+mod inbox;
 mod memory;
 mod origin;
 mod policy;
@@ -15,8 +17,10 @@ mod session;
 mod transcript;
 
 pub use approval::{Approval, ApprovalStatus};
+pub use artifact::{ArtifactId, ArtifactKind, ArtifactMeta};
 pub use events::{RunEvent, RunEventKind};
 pub use ids::{ApprovalId, RunId, SessionId};
+pub use inbox::{InboxItem, InboxItemKind};
 pub use memory::{MemoryEntry, MemoryId};
 pub use origin::{ParseRunOriginError, RunOrigin};
 pub use policy::Policy;

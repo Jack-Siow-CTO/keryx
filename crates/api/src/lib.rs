@@ -8,7 +8,7 @@ mod routes;
 mod state;
 
 pub use auth::OperatorTokenTable;
-pub use routes::router;
+pub use routes::{router, router_with_artifact_put};
 pub use state::{AppState, ProviderCatalog, ProviderInfo};
 
 /// Workspace smoke: API adapter is loadable.

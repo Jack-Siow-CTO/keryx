@@ -1,9 +1,9 @@
 use async_trait::async_trait;
 use keryx_app::SessionStore;
 use keryx_domain::{
-    Approval, ApprovalId, ApprovalStatus, MemoryEntry, MemoryId, MessageRole, PrincipalId, Run,
-    RunId, RunOrigin, RunStatus, Schedule, ScheduleId, ScheduleStatus, Session, SessionId,
-    Transcript, TranscriptMessage,
+    Approval, ApprovalId, ApprovalStatus, ArtifactId, ArtifactKind, ArtifactMeta, MemoryEntry,
+    MemoryId, MessageRole, PrincipalId, Run, RunId, RunOrigin, RunStatus, Schedule, ScheduleId,
+    ScheduleStatus, Session, SessionId, Transcript, TranscriptMessage,
 };
 use rusqlite::{params, Connection};
 use std::path::{Path, PathBuf};
@@ -106,6 +106,17 @@ impl SqliteSessionStore {
                 next_fire_at INTEGER NOT NULL,
                 policy_tools TEXT NOT NULL,
                 last_fired_at INTEGER
+            );
+            CREATE TABLE IF NOT EXISTS artifacts (
+                id TEXT PRIMARY KEY NOT NULL,
+                kind TEXT NOT NULL,
+                media_type TEXT NOT NULL,
+                byte_len INTEGER NOT NULL,
+                created_at INTEGER NOT NULL,
+                run_id TEXT,
+                session_id TEXT,
+                summary TEXT NOT NULL,
+                content_text TEXT
             );
             ",
         )
@@ -216,6 +227,12 @@ impl SqliteSessionStore {
             "transcript_messages",
             "artifact_refs",
             "ALTER TABLE transcript_messages ADD COLUMN artifact_refs TEXT",
+        )?;
+        Self::ensure_column(
+            &conn,
+            "artifacts",
+            "content_text",
+            "ALTER TABLE artifacts ADD COLUMN content_text TEXT",
         )?;
         Ok(())
     }
@@ -1233,6 +1250,66 @@ impl SessionStore for SqliteSessionStore {
             )?);
         }
         Ok(out)
+    }
+
+    async fn create_artifact_meta(&self, meta: ArtifactMeta) -> Result<(), String> {
+        let conn = self.conn.lock().map_err(|e| e.to_string())?;
+        conn.execute(
+            "INSERT INTO artifacts (id, kind, media_type, byte_len, created_at, run_id, session_id, summary, content_text)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+            params![
+                meta.id.to_string(),
+                meta.kind.as_str(),
+                meta.media_type,
+                meta.byte_len as i64,
+                meta.created_at,
+                meta.run_id,
+                meta.session_id,
+                meta.summary,
+                meta.content_text,
+            ],
+        )
+        .map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
+    async fn get_artifact_meta(&self, id: ArtifactId) -> Result<Option<ArtifactMeta>, String> {
+        let conn = self.conn.lock().map_err(|e| e.to_string())?;
+        let mut stmt = conn
+            .prepare(
+                "SELECT id, kind, media_type, byte_len, created_at, run_id, session_id, summary, content_text
+                 FROM artifacts WHERE id = ?1",
+            )
+            .map_err(|e| e.to_string())?;
+        let mut rows = stmt
+            .query(params![id.to_string()])
+            .map_err(|e| e.to_string())?;
+        match rows.next().map_err(|e| e.to_string())? {
+            Some(row) => {
+                let id_s: String = row.get(0).map_err(|e| e.to_string())?;
+                let kind_s: String = row.get(1).map_err(|e| e.to_string())?;
+                let media_type: String = row.get(2).map_err(|e| e.to_string())?;
+                let byte_len: i64 = row.get(3).map_err(|e| e.to_string())?;
+                let created_at: i64 = row.get(4).map_err(|e| e.to_string())?;
+                let run_id: Option<String> = row.get(5).map_err(|e| e.to_string())?;
+                let session_id: Option<String> = row.get(6).map_err(|e| e.to_string())?;
+                let summary: String = row.get(7).map_err(|e| e.to_string())?;
+                let content_text: Option<String> = row.get(8).map_err(|e| e.to_string())?;
+                Ok(Some(ArtifactMeta {
+                    id: ArtifactId::from_str(&id_s).map_err(|e| e.to_string())?,
+                    kind: ArtifactKind::parse(&kind_s)
+                        .ok_or_else(|| format!("unknown artifact kind: {kind_s}"))?,
+                    media_type,
+                    byte_len: byte_len as u64,
+                    created_at,
+                    run_id,
+                    session_id,
+                    summary,
+                    content_text,
+                }))
+            }
+            None => Ok(None),
+        }
     }
 }
 

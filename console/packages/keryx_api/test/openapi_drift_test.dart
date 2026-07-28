@@ -38,6 +38,12 @@ void main() {
     expect(paths.containsKey('/v1/sessions'), isTrue);
     expect(paths.containsKey('/v1/sessions/{session_id}'), isTrue);
     expect(paths.containsKey('/v1/sessions/{session_id}/transcript'), isTrue);
+    expect(paths.containsKey('/v1/inbox'), isTrue);
+    expect(paths.containsKey('/v1/memory'), isTrue);
+    expect(paths.containsKey('/v1/skills'), isTrue);
+    expect(paths.containsKey('/v1/artifacts/{artifact_id}'), isTrue);
+    expect(paths.containsKey('/v1/sessions/{session_id}/runs'), isTrue);
+    expect(paths.containsKey('/v1/runs/{run_id}/events'), isTrue);
   });
 
   test('health is unauthenticated getHealth', () {

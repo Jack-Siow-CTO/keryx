@@ -7,3 +7,4 @@ export 'src/client.dart';
 export 'src/connectivity.dart';
 export 'src/errors.dart';
 export 'src/models.dart';
+export 'src/sse.dart';

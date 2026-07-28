@@ -1,6 +1,7 @@
 use crate::auth::OperatorTokenTable;
 use keryx_app::ControlPlaneService;
 use serde::Serialize;
+use std::path::PathBuf;
 use std::sync::Arc;
 
 /// Non-secret model provider catalog for `GET /v1/providers`.
@@ -28,6 +29,12 @@ pub struct AppState {
     pub control: Arc<dyn ControlPlaneService>,
     pub tokens: Arc<OperatorTokenTable>,
     pub providers: Arc<ProviderCatalog>,
+    /// Optional skills root for Console read-mostly Skills API (ADR 0030).
+    pub skills_root: Option<PathBuf>,
+    /// Optional Worker data dir for Artifact blobs (ADR 0026).
+    pub artifacts_dir: Option<PathBuf>,
+    /// When true, mount Seam 1 Artifact PUT (never default for production Worker).
+    pub allow_artifact_put: bool,
 }
 
 impl AppState {
@@ -46,6 +53,26 @@ impl AppState {
             control,
             tokens: Arc::new(tokens),
             providers: Arc::new(providers),
+            skills_root: None,
+            artifacts_dir: None,
+            allow_artifact_put: false,
         }
+    }
+
+    #[must_use]
+    pub fn with_console_paths(
+        mut self,
+        skills_root: Option<PathBuf>,
+        artifacts_dir: Option<PathBuf>,
+    ) -> Self {
+        self.skills_root = skills_root;
+        self.artifacts_dir = artifacts_dir;
+        self
+    }
+
+    #[must_use]
+    pub fn with_artifact_put(mut self, allow: bool) -> Self {
+        self.allow_artifact_put = allow;
+        self
     }
 }
