@@ -1,6 +1,6 @@
 # Console 1.0 is a big-bang full agent OS GUI
 
-Console’s first real release (1.0) is the full personal-agent-OS operator GUI—not a Sessions/Approvals-only vertical slice. In scope for 1.0: dual-rail shell, Session conversation + activity, explicit composer/Run lifecycle, Approvals Inbox, Memory, Schedules, Skills, provider/model selection (not Worker secret vault), and rich tool viewers sufficient for daily operation (Child Runs, terminal/file/browser outcomes as first-class surfaces). Phased “ship B then expand” and parallel unfinished epics were rejected as the release strategy: dogfood and external “real Console” labeling wait until this surface is coherent.
+Console’s first real release (1.0) is the full personal-agent-OS operator GUI—not a Sessions/Approvals-only vertical slice. In scope for 1.0: messaging chat-list shell (ADR 0031), Session conversation + collapsible activity, explicit composer/Run lifecycle (Send when idle), Approvals via Needs you + in-thread cards (ADR 0033), Memory, Schedules, Skills, provider/model selection (not Worker secret vault), and rich tool viewers sufficient for daily operation (Child Runs, terminal/file/browser outcomes as first-class surfaces). Phased “ship B then expand” and parallel unfinished epics were rejected as the release strategy: dogfood and external “real Console” labeling wait until this surface is coherent. (Earlier wording said dual-rail shell; IA is now ADR 0031.)
 
 ## Consequences
 

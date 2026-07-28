@@ -1,12 +1,12 @@
 # Keryx Console 1.0 — Full agent OS operator GUI
 
 Status: **ready-for-agent**  
-Aligned with: `CONTEXT.md`, ADRs 0001–0012 (Worker spine), **ADRs 0013–0030 (Console)**, specs 0001–0003  
+Aligned with: `CONTEXT.md`, ADRs 0001–0012 (Worker spine), **ADRs 0013–0034 (Console)** (0014/0020 superseded by 0031/0032 messaging IA), specs 0001–0003  
 Test seams: **(1) Control plane in-process (extended)** · **(4) OpenAPI ↔ Dart API client contract** · secondary: Console widget/golden  
 Release strategy: **big-bang 1.0** (ADR 0022)  
 Client: Flutter thin Principal client under `console/` · Worker remains system of record  
 
-This document is the product & system spec (PRD) for Console. It synthesizes the grill freeze and ADRs 0013–0030. The Definition of Done table is normative for release gating.
+This document is the product & system spec (PRD) for Console. It synthesizes the grill freeze and ADRs 0013–0034. The Definition of Done table is normative for release gating.
 
 ---
 
@@ -14,14 +14,14 @@ This document is the product & system spec (PRD) for Console. It synthesizes the
 
 I already run a Keryx **Worker**: durable **Sessions** and **Runs**, operator-token auth, SSE progress, SQLite survival, models, tools, Approvals, Schedules, Memory, and Skills on a personal host I reach over Tailnet. What I do *not* have is a day-to-day graphical home for that agent OS.
 
-CLI, TUI, and curl are power tools—not a place I live. Telegram/Discord **Gateways** (when enabled) are ambient reduced-Policy chat, not a full-trust cockpit for Approvals, Memory curate, Schedule management, and tool-heavy Run inspection.
+CLI, TUI, and curl are power tools—not a place I live. Telegram/Discord **Gateways** (when enabled) are ambient reduced-Policy chat, not a full-trust operator surface for Approvals, Memory curate, Schedule management, and tool-heavy Run inspection.
 
-I want a **cross-platform Console** (mobile and desktop) that feels like Slack’s *interaction model*—attention rail, channels, readable conversation, sticky actions—mapped honestly onto Keryx’s domain (Session, Run, Transcript, Approval, Inbox, Memory, Schedule, Skill, Artifact), without:
+I want a **cross-platform Console** (mobile and desktop) that feels like a **messenger for agents**—chat list of Sessions, open thread, Send-first composer, Needs you attention, readable layered conversation—mapped honestly onto Keryx’s domain (Session, Run, Transcript, Approval, Inbox, Memory, Schedule, Skill, Artifact), without:
 
 - becoming a second messaging Gateway,
 - hosting a client-side agent loop,
 - inventing offline dual sources of truth,
-- or shipping a pixel clone of Slack.
+- or shipping a pixel clone of WhatsApp/Telegram/Slack.
 
 Without Console, the personal agent OS stays operable only by people willing to drive HTTP and terminals. The Worker’s control plane is ready to be a system of record; the missing piece is a first-party operator surface worthy of daily use.
 
@@ -35,10 +35,10 @@ From my perspective:
 
 1. I install Console on **macOS and iOS** (Linux desktop Should; Android/Windows only if free).
 2. I join the **Tailnet** out-of-band, paste **Worker base URL + operator token** once; secrets live in OS secure storage with optional biometric lock.
-3. I land in a **dual-rail** home: **Inbox** (cross-Session needs-you) + **Session list** (channels).
-4. I open a **Session**, read durable **Transcript** conversation, watch live **Run events** as collapsible activity, and use an explicit **composer** (start Run when idle; cancel / cancel-and-rerun when Active—no silent queue).
-5. **Approvals** appear as sticky cards and Inbox items; I approve or deny with full Principal authority (`control_plane` Run origin, not `gateway:*`).
-6. I curate **Memory**, manage **Schedules**, browse **Skills**, pick **provider/model** for Runs, and expand **Artifacts** (diff, terminal, screenshot) for rich tool viewing.
+3. I land in a **chat list** home: **Sessions** as threads with a single agent identity, plus a thin **Needs you** system row (Inbox projection).
+4. I open a **Session** thread, read durable **Transcript** prose as chat messages, watch live **Run events** as collapsible activity, and use a messenger **composer** (Send starts a root Run when idle; cancel / cancel-and-rerun when Active—no silent queue).
+5. **Approvals** appear as sticky in-thread cards and via Needs you; I approve or deny with full Principal authority (`control_plane` Run origin, not `gateway:*`).
+6. I open a **profile hub** for **Memory**, **Schedules**, **Skills**, and **Settings**; per-Session Policy/Workspace live under **Session info**. I pick **provider/model** for Runs and expand **Artifacts** (diff, terminal, screenshot) for rich tool viewing.
 7. After kill/reconnect, truth comes from the Worker (REST reload + SSE resubscribe)—not a local write replica.
 
 **Release strategy is big-bang:** the first release labeled real Console includes the full Must gate below—not a Sessions-only pager followed by years of “almost.” Worker API gaps for that gate are **blockers**, not follow-ups.
@@ -71,15 +71,17 @@ Hermes-class breadth is inspiration; control-plane canon, Policy, and Tailnet-on
 15. As a Principal, I want push notification payloads never to include the operator token, so that OS notification centers are not a secret store.
 16. As a Principal, I want API client types to allow future per-device tokens without rewriting the shell, so that lost-phone revoke can evolve later.
 
-### Dual-rail navigation and layout
+### Messaging navigation and layout
 
-17. As a Principal, I want a dual-rail home of Inbox + Session list on wide layouts, so that attention and ongoing work are both visible.
-18. As a Principal on phone, I want stacked navigation (Inbox / Sessions / More) with Session as full-screen detail, so that dual-rail principles survive small screens.
-19. As a Principal, I want Sessions to behave like durable channels, so that multi-turn Transcript work has a stable home.
+17. As a Principal, I want a chat-list home of Sessions on wide layouts (list | thread), so that ongoing work scans like a messenger.
+18. As a Principal on phone, I want stacked navigation (list → full-screen thread; hub via menu), so that messenger principles survive small screens.
+19. As a Principal, I want Sessions to behave like durable chat threads, so that multi-turn Transcript work has a stable home.
 20. As a Principal, I want Workspace roots not to be the primary sidebar tree, so that Policy path jails are not confused with product folders.
-21. As a Principal, I want Slack-like interaction patterns without Slack visual cloning, so that Keryx keeps its own operator aesthetic.
+21. As a Principal, I want messenger interaction patterns without WhatsApp/Telegram/Slack visual cloning, so that Keryx keeps its own operator aesthetic.
 22. As a Principal, I want system light/dark theme and a single “needs you” accent, so that attention is obvious without noisy chrome.
 23. As a Principal, I want comfortable-compact density, so that desktop is efficient and mobile is still readable.
+23a. As a Principal, I want a Needs you system row (not a peer permanent rail) for cross-Session Approvals and failed Runs, so that messaging IA does not bury blast-radius decisions.
+23b. As a Principal, I want Memory, Skills, Schedules, and Settings under a profile hub, and Policy/Workspace under Session info, so that config does not compete with the chat list.
 
 ### Session list projection
 
@@ -88,7 +90,7 @@ Hermes-class breadth is inspiration; control-plane canon, Policy, and Tailnet-on
 26. As a Principal, I want default titles derived from the first user goal when I have not renamed, so that new Sessions are not anonymous.
 27. As a Principal, I want pending Approval count (or equivalent badge) on a Session row, so that channel-level attention is visible without opening Inbox.
 28. As a Principal, I want Session list attention badges to mean Approvals/Active work—not multi-human unread cursors, so that single-operator semantics stay honest.
-29. As a Principal, I want to create a new Session from Console, so that I can start a fresh channel without CLI.
+29. As a Principal, I want New chat to create an empty Session under defaults (no mandatory wizard), so that first Send starts work without a goal cockpit.
 30. As a Principal, I want to open a Session and see its detail projection, so that header chips (Active Run, origin hints) are available before scrolling Transcript.
 
 ### Inbox
@@ -113,7 +115,7 @@ Hermes-class breadth is inspiration; control-plane canon, Policy, and Tailnet-on
 
 ### Composer and Run lifecycle
 
-45. As a Principal, I want send on an idle Session to start a root Run with my text as the goal, so that intent is explicit.
+45. As a Principal, I want Send on an idle Session (primary CTA, not a separate Start Run button) to start a root Run with my text as the goal, so that chat muscle memory matches agent work.
 46. As a Principal, I want optional provider/model selection when starting a Run, so that I can choose among registered providers.
 47. As a Principal, I want the composer to refuse silent second root Runs when one is Active, so that Session serialism is preserved.
 48. As a Principal, I want explicit cancel of the Active root Run, so that runaway work stops.
@@ -178,7 +180,7 @@ Hermes-class breadth is inspiration; control-plane canon, Policy, and Tailnet-on
 
 ### Platforms, quality, and offline
 
-86. As a Principal on macOS, I want a first-class desktop Console, so that multi-column dual-rail is usable daily.
+86. As a Principal on macOS, I want a first-class desktop Console, so that master–detail (list | thread) is usable daily.
 87. As a Principal on iOS, I want a first-class mobile Console, so that Approvals and Sessions work away from the desk.
 88. As a Principal, I want last-fetched caches and composer drafts only—not offline Start Run, so that I never believe work ran when the Worker did not accept it.
 89. As a Principal, I want widget/golden coverage for composer modes and Inbox, so that lifecycle UX regressions are caught.
@@ -208,10 +210,10 @@ Hermes-class breadth is inspiration; control-plane canon, Policy, and Tailnet-on
 | # | Capability | Gate | ADR / notes |
 |---|------------|------|-------------|
 | 1 | Settings: base URL + token (secure storage), biometric lock, connectivity/health | **Must** | 0021 |
-| 2 | Dual-rail: Inbox + Session list; create Session; open Session | **Must** | 0014, 0027, 0028 |
+| 2 | Messaging shell: chat list of Sessions + Needs you system row; new chat; open thread | **Must** | 0031, 0027, 0028, 0034 |
 | 3 | Transcript conversation + live SSE activity (collapsed tools) | **Must** | 0015, 0025 |
-| 4 | Composer: idle→start Run; Active→cancel / cancel-and-rerun | **Must** | 0016; steer post-1.0 until API exists |
-| 5 | Approvals: list, approve/deny, deep link target | **Must** | push **Should** |
+| 4 | Composer: idle→Send starts Run; Active→cancel / cancel-and-rerun | **Must** | 0016, 0034; steer post-1.0 until API exists |
+| 5 | Approvals: Needs you + sticky in-thread; approve/deny; deep link | **Must** | 0033; push **Should** |
 | 6 | Run status: Active chip, budgets/errors, Child Run tree (read-only) | **Must** | |
 | 7 | Memory: search + read + write/curate UI | **Must** | 0029 |
 | 8 | Schedules: list/create/pause/resume/delete | **Must** | existing control plane |
@@ -228,13 +230,15 @@ Hermes-class breadth is inspiration; control-plane canon, Policy, and Tailnet-on
 | 19 | Platforms | **Must** macOS + iOS · **Should** Linux · **Out** Android/Windows unless free | 0018 |
 | 20 | Tests | **Must** API client contracts + widget/golden composer/Inbox · **Should** integration vs local Worker | |
 
-### Information architecture and UX (ADRs 0014, 0015, 0016, 0020)
+### Information architecture and UX (ADRs 0031–0034; 0015–0016 reaffirmed; 0014/0020 superseded)
 
-6. **Dual-rail:** Inbox + Session list; not Session-only, Inbox-only, or Workspace-first sidebar product tree.
-7. **Session main pane:** conversation layer = Transcript prose; activity layer = Run events / compact tools; Approvals = sticky action cards.
-8. **Composer modes:** idle → start root Run; Active → explicit wait/cancel/cancel-and-rerun (steer only if control plane supports it later). Never silent queue or fake second root Run.
-9. **Visual system:** Slack *principles*, Keryx *skin*—neutral operator chrome, system light/dark, single needs-you accent, comfortable-compact density.
-10. **Responsive:** wide = multi-column; medium = list + main; narrow = tab/stack Inbox · Sessions · detail.
+6. **Messaging chat list:** Session = chat thread + thin Needs you system row; not dual-rail peer rails, not Session-only without attention, not Workspace-first sidebar product tree (ADR 0031).
+7. **Session thread:** conversation layer = Transcript prose as first-class messages; activity layer = collapsible tools/Child Runs/status; Approvals = sticky in-thread cards + Needs you (ADRs 0015, 0033).
+8. **Composer modes:** idle → Send starts root Run (primary CTA); Active → explicit wait/cancel/cancel-and-rerun (steer only if control plane supports it later). Never silent queue or fake second root Run (ADRs 0016, 0034).
+9. **Visual system:** messenger *principles*, Keryx *skin*—neutral operator chrome, system light/dark, single needs-you accent, comfortable-compact density (ADR 0032).
+10. **Responsive:** wide = list | thread (+ optional contextual third pane); medium/narrow = stack list → thread; hub via profile/menu—not permanent Inbox column.
+10a. **New chat:** empty Session under defaults; no mandatory create wizard (ADR 0034).
+10b. **Hub vs Session info:** Memory/Skills/Schedules/Settings in profile hub; Policy/Workspace in Session info.
 
 ### Transport and client architecture (ADRs 0017, 0018, 0019, 0021, 0024)
 
@@ -281,7 +285,7 @@ Use `CONTEXT.md` vocabulary throughout implementation and UI copy where domain t
 ### Modules / surfaces to build or extend
 
 26. **Worker domain/app/storage/api:** Session projection fields; structured TranscriptMessage; Artifact metadata + blob storage; Inbox projection; Memory HTTP; Skills HTTP; richer tool event payloads and artifact production from tools; OpenAPI export/check-in.
-27. **Console Flutter workspace:** app shell (responsive dual-rail), settings/auth, Inbox, Session list/detail, composer, SSE subscription lifecycle, Memory/Schedules/Skills screens, artifact viewers, Riverpod controllers.
+27. **Console Flutter workspace:** app shell (responsive messenger master–detail), settings/auth, chat list + Needs you, Session thread, composer, SSE subscription lifecycle, profile hub (Memory/Schedules/Skills/Settings), Session info, artifact viewers, Riverpod controllers.
 28. **Contract:** checked-in OpenAPI; pure Dart client aligned to it; CI drift failure.
 
 ### Non-negotiables
@@ -301,8 +305,8 @@ Use `CONTEXT.md` vocabulary throughout implementation and UI copy where domain t
 2. Control-plane routes: sessions list/get/patch, transcript page, inbox, memory CRUD, skills GET, artifacts GET; richer events  
 3. OpenAPI freeze + Seam 1 tests for new routes  
 4. Dart `keryx_api` client + contract tests  
-5. Flutter shell: auth, dual-rail, Session pane, composer, SSE  
-6. Approvals + Inbox polish  
+5. Flutter shell: auth, chat list + thread, composer Send, SSE  
+6. Approvals + Needs you polish  
 7. Memory, Schedules, Skills browse  
 8. Artifact viewers  
 9. Platform packaging macOS/iOS; optional push  
@@ -363,7 +367,7 @@ No Flutter dependency at this seam. Highest client seam without dragging UI.
 
 - Composer idle vs Active affordances  
 - Inbox item actions wiring (against faked repositories)  
-- Dual-rail / narrow navigation smoke  
+- Chat list / thread / narrow navigation smoke  
 
 Not a substitute for Seam 1 or Seam 4. Prefer fakes over live Worker in default CI.
 
@@ -412,7 +416,8 @@ For Console **1.0** (normative **Out** / non-goals):
 - **Web public** Console hosting  
 - **Multi-window** desktop, custom theme marketplace, i18n  
 - **Android/Windows** as Must platforms  
-- **Pixel-faithful Slack** skin  
+- **Pixel-faithful WhatsApp/Telegram/Slack** skin  
+- Dual-rail operator cockpit as the default home (superseded by messaging IA)
 - Replacing CLI/TUI or removing Gateways  
 - Changing Worker hexagonal ownership of Policy, budgets, or cancel  
 
@@ -427,13 +432,13 @@ Related but separate specs: Worker v1 (0001), v2 agent OS (0002), MCP capabiliti
 | ADR | Decision |
 |-----|----------|
 | 0013 | Console = primary control-plane operator surface |
-| 0014 | Dual-rail IA (Inbox + Session list) |
-| 0015 | Conversation + activity layers |
-| 0016 | Explicit composer Run modes |
+| 0014 | ~~Dual-rail IA~~ → **superseded by 0031** |
+| 0015 | Conversation + activity layers (reaffirmed for messenger) |
+| 0016 | Explicit composer Run modes (Send refined by 0034) |
 | 0017 | REST + SSE; push = Inbox wakeup only |
 | 0018 | Flutter multi-platform |
 | 0019 | Strict thin client |
-| 0020 | Slack principles, not Slack skin |
+| 0020 | ~~Slack principles shell~~ → **superseded by 0032** |
 | 0021 | Operator token + secure storage + biometric |
 | 0022 | Big-bang Console 1.0 |
 | 0023 | Expand REST `/v1/*` + SSE (no BFF/gRPC) |
@@ -444,10 +449,14 @@ Related but separate specs: Worker v1 (0001), v2 agent OS (0002), MCP capabiliti
 | 0028 | Inbox projection endpoint |
 | 0029 | Memory control-plane API (one store) |
 | 0030 | Skills read-mostly for 1.0 |
+| 0031 | Messaging chat-list IA |
+| 0032 | Messenger principles, not chat-app skin |
+| 0033 | Approvals: Needs you + sticky in-thread |
+| 0034 | New chat empty Session; idle Send starts Run |
 
 ### Success scenario
 
-Operator on tailnet opens Console on Mac or iPhone → dual-rail home → multi-turn Session with live activity → clears Approvals → curates Memory → manages Schedules → browses Skills → expands tool Artifacts → kills app → returns later with durable Worker state intact.
+Operator on tailnet opens Console on Mac or iPhone → chat list home → multi-turn Session thread with live collapsible activity → clears Approvals via Needs you or sticky card → curates Memory from hub → manages Schedules → browses Skills → expands tool Artifacts → kills app → returns later with durable Worker state intact.
 
 ### Relationship to prior specs
 
@@ -457,7 +466,7 @@ Operator on tailnet opens Console on Mac or iPhone → dual-rail home → multi-
 
 ### Grill freeze
 
-Product and architecture decisions above were locked in grilling. Implementation should not reopen role, IA, stack, auth model, thin-client rules, or DoD without a deliberate ADR supersession and spec edit.
+Product and architecture decisions above were locked in grilling (including 2026-07-28 messaging IA supersession of dual-rail/Slack shell). Implementation should not reopen role, IA, stack, auth model, thin-client rules, or DoD without a deliberate ADR supersession and spec edit.
 
 ---
 

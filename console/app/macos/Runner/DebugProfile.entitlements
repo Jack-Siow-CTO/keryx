@@ -2,8 +2,13 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+	<!--
+	  Debug/Profile: sandbox OFF so Keychain works with Flutter's ad-hoc
+	  CODE_SIGN_IDENTITY="-" (no Apple Development team required).
+	  Release keeps sandbox + network.client + keychain-access-groups.
+	-->
 	<key>com.apple.security.app-sandbox</key>
-	<true/>
+	<false/>
 	<key>com.apple.security.cs.allow-jit</key>
 	<true/>
 	<key>com.apple.security.network.client</key>

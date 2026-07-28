@@ -1,0 +1,5 @@
+# Console primary IA is a messaging chat list
+
+Status: **accepted** (grill 2026-07-28). **Supersedes ADR 0014** (dual-rail Inbox + Session list as peer primary navigation).
+
+Console’s home surface is a **chat list of Sessions** (plus thin system rows for cross-Session attention such as Needs you / Inbox projection), not dual-rail operator navigation and not Workspace-first. One Session is one chat thread with a single agent identity (Worker + Soul); Child Runs are not contacts. Global Memory, Skills, Schedules, and Settings live under a profile/overflow hub; per-Session Policy and Workspace live under Session info. Layout is messenger master–detail (list | thread on wide; stacked on narrow), with an optional contextual third pane for Session info or artifacts—not a permanent Inbox rail. Chosen so day-to-day work feels like WhatsApp/Telegram-class chat while remaining a Principal control-plane client (not a Gateway). Rejected: dual-rail cockpit as default, multi-agent contact list without domain support, Workspace-as-chat, and pure consumer flat bubble logs.

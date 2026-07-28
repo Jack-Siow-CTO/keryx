@@ -2,16 +2,24 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:keryx_api/keryx_api.dart';
 
-import '../artifacts/artifact_viewer.dart';
+import '../../widgets/console_chrome.dart';
 import '../auth/auth_controller.dart';
 import 'session_run_controller.dart';
 import 'sessions_controller.dart';
 
-/// Conversation layer from durable Worker Transcript (ADR 0015, 0025).
+/// Layered thread timeline from durable Worker Transcript (ADR 0015).
+///
+/// Prose = first-class messages; tools/Child-Run/status = collapsible activity.
+/// Not flat bubble spam of every event; not default Chat | Activity tabs.
 class TranscriptPane extends ConsumerStatefulWidget {
-  const TranscriptPane({super.key, required this.sessionId});
+  const TranscriptPane({
+    super.key,
+    required this.sessionId,
+    this.onOpenArtifact,
+  });
 
   final String sessionId;
+  final ValueChanged<String>? onOpenArtifact;
 
   @override
   ConsumerState<TranscriptPane> createState() => _TranscriptPaneState();
@@ -52,7 +60,6 @@ class _TranscriptPaneState extends ConsumerState<TranscriptPane> {
   }
 
   void _onScroll() {
-    // Scroll up (near min) loads older history.
     if (_scroll.position.pixels <= 40 &&
         _nextBefore != null &&
         !_loading) {
@@ -69,7 +76,6 @@ class _TranscriptPaneState extends ConsumerState<TranscriptPane> {
       final client = ref.read(authControllerProvider.notifier).client;
       if (client == null) throw Exception('Not connected');
       final page = await client.getTranscript(widget.sessionId, limit: 50);
-      // API newest-first → reverse for chronological ListView.
       setState(() {
         _messages
           ..clear()
@@ -97,10 +103,12 @@ class _TranscriptPaneState extends ConsumerState<TranscriptPane> {
     try {
       final client = ref.read(authControllerProvider.notifier).client;
       if (client == null) return;
-      final page =
-          await client.getTranscript(widget.sessionId, limit: 50, before: before);
+      final page = await client.getTranscript(
+        widget.sessionId,
+        limit: 50,
+        before: before,
+      );
       setState(() {
-        // Older messages (page is newest-first among older set) → reverse then prepend.
         _messages.insertAll(0, page.messages.reversed);
         _nextBefore = page.nextBefore;
         _loading = false;
@@ -115,30 +123,32 @@ class _TranscriptPaneState extends ConsumerState<TranscriptPane> {
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
     if (_error != null && _messages.isEmpty) {
-      return Center(
-        child: Text(_error!, style: TextStyle(color: theme.colorScheme.error)),
+      return ConsoleEmptyState(
+        icon: Icons.error_outline,
+        title: 'Transcript unavailable',
+        body: _error!,
+        action: FilledButton.tonal(
+          onPressed: _loadInitial,
+          child: const Text('Retry'),
+        ),
       );
     }
     if (_loading && _messages.isEmpty) {
-      return const Center(child: CircularProgressIndicator());
+      return const ConsoleLoader(label: 'Loading Transcript…');
     }
     if (_messages.isEmpty) {
-      return Center(
-        child: Text(
-          'No Transcript yet. Start a Run from the composer (next slice).',
-          style: theme.textTheme.bodyMedium?.copyWith(
-            color: theme.colorScheme.onSurfaceVariant,
-          ),
-          textAlign: TextAlign.center,
-        ),
+      return const ConsoleEmptyState(
+        icon: Icons.chat_bubble_outline,
+        title: 'No messages yet',
+        body:
+            'Send a message to start the first Run. Prose appears as chat; tools stay collapsible activity.',
       );
     }
 
     return ListView.builder(
       controller: _scroll,
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+      padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),
       itemCount: _messages.length + (_loading ? 1 : 0),
       itemBuilder: (context, i) {
         if (_loading && i == 0) {
@@ -156,7 +166,7 @@ class _TranscriptPaneState extends ConsumerState<TranscriptPane> {
         final idx = _loading ? i - 1 : i;
         final m = _messages[idx];
         if (m.isTool) {
-          return _ToolRow(
+          return _ActivityBlock(
             message: m,
             expanded: _expandedTools.contains(m.id),
             onToggle: () {
@@ -168,16 +178,18 @@ class _TranscriptPaneState extends ConsumerState<TranscriptPane> {
                 }
               });
             },
+            onOpenArtifact: widget.onOpenArtifact,
           );
         }
-        return _ProseBubble(message: m);
+        return _ProseMessage(message: m);
       },
     );
   }
 }
 
-class _ProseBubble extends StatelessWidget {
-  const _ProseBubble({required this.message});
+/// Operator-readable prose row (not mandatory consumer chat bubble cosplay).
+class _ProseMessage extends StatelessWidget {
+  const _ProseMessage({required this.message});
 
   final TranscriptMessage message;
 
@@ -185,51 +197,72 @@ class _ProseBubble extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final isUser = message.role == 'user';
-    final align = isUser ? Alignment.centerRight : Alignment.centerLeft;
-    final bg = isUser
-        ? theme.colorScheme.primaryContainer
-        : theme.colorScheme.surfaceContainerHighest;
+    final isSystem = message.role == 'system';
+    final author = isUser
+        ? 'You'
+        : isSystem
+            ? 'System'
+            : 'Keryx';
+    final authorColor = isUser
+        ? theme.colorScheme.primary
+        : theme.colorScheme.onSurfaceVariant;
 
-    return Align(
-      alignment: align,
-      child: Container(
-        margin: const EdgeInsets.symmetric(vertical: 6),
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-        constraints: BoxConstraints(
-          maxWidth: MediaQuery.sizeOf(context).width * 0.75,
-        ),
-        decoration: BoxDecoration(
-          color: bg,
-          borderRadius: BorderRadius.circular(12),
-        ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              isUser ? 'You' : message.role,
-              style: theme.textTheme.labelSmall?.copyWith(
-                fontWeight: FontWeight.w700,
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 8),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Row(
+            children: [
+              Text(
+                author,
+                style: theme.textTheme.labelSmall?.copyWith(
+                  fontWeight: FontWeight.w700,
+                  color: authorColor,
+                ),
               ),
-            ),
-            const SizedBox(height: 4),
-            SelectableText(message.content),
-          ],
-        ),
+              if (message.createdAt > 0) ...[
+                const SizedBox(width: 8),
+                Text(
+                  _formatTime(message.createdAt),
+                  style: theme.textTheme.labelSmall?.copyWith(
+                    color: theme.colorScheme.onSurfaceVariant,
+                  ),
+                ),
+              ],
+            ],
+          ),
+          const SizedBox(height: 4),
+          SelectableText(
+            message.content,
+            style: theme.textTheme.bodyMedium?.copyWith(height: 1.45),
+          ),
+        ],
       ),
     );
   }
+
+  String _formatTime(int epochSecs) {
+    final dt = DateTime.fromMillisecondsSinceEpoch(epochSecs * 1000);
+    final h = dt.hour.toString().padLeft(2, '0');
+    final m = dt.minute.toString().padLeft(2, '0');
+    return '$h:$m';
+  }
 }
 
-class _ToolRow extends StatelessWidget {
-  const _ToolRow({
+/// Collapsible tool / Child-Run / status activity in the same timeline.
+class _ActivityBlock extends StatelessWidget {
+  const _ActivityBlock({
     required this.message,
     required this.expanded,
     required this.onToggle,
+    this.onOpenArtifact,
   });
 
   final TranscriptMessage message;
   final bool expanded;
   final VoidCallback onToggle;
+  final ValueChanged<String>? onOpenArtifact;
 
   @override
   Widget build(BuildContext context) {
@@ -238,76 +271,115 @@ class _ToolRow extends StatelessWidget {
     final name = tool?.name ?? 'tool';
     final status = tool?.status ?? '';
     final summary = tool?.summary ?? message.content;
+    final looksLikeChild = name.toLowerCase().contains('child') ||
+        summary.toLowerCase().contains('child run');
 
-    return Card(
-      margin: const EdgeInsets.symmetric(vertical: 4),
-      child: InkWell(
-        onTap: onToggle,
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Row(
-                children: [
-                  Icon(
-                    expanded ? Icons.expand_more : Icons.chevron_right,
-                    size: 18,
-                  ),
-                  const SizedBox(width: 6),
-                  Expanded(
-                    child: Text(
-                      name,
-                      style: theme.textTheme.titleSmall?.copyWith(
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 3),
+      child: Material(
+        color: theme.colorScheme.surfaceContainerLow,
+        borderRadius: BorderRadius.circular(10),
+        child: InkWell(
+          borderRadius: BorderRadius.circular(10),
+          onTap: onToggle,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Icon(
+                      expanded ? Icons.expand_more : Icons.chevron_right,
+                      size: 18,
+                      color: theme.colorScheme.onSurfaceVariant,
+                    ),
+                    const SizedBox(width: 6),
+                    Icon(
+                      looksLikeChild
+                          ? Icons.account_tree_outlined
+                          : Icons.build_circle_outlined,
+                      size: 15,
+                      color: theme.colorScheme.onSurfaceVariant,
+                    ),
+                    const SizedBox(width: 6),
+                    Expanded(
+                      child: Text(
+                        name,
+                        style: theme.textTheme.titleSmall,
+                      ),
+                    ),
+                    Text(
+                      status,
+                      style: theme.textTheme.labelSmall?.copyWith(
+                        color: theme.colorScheme.primary,
                         fontWeight: FontWeight.w600,
                       ),
                     ),
-                  ),
-                  Text(
-                    status,
-                    style: theme.textTheme.labelSmall?.copyWith(
-                      color: theme.colorScheme.primary,
+                  ],
+                ),
+                if (!expanded)
+                  Padding(
+                    padding: const EdgeInsets.only(left: 45, top: 3),
+                    child: Text(
+                      summary,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: theme.textTheme.bodySmall,
                     ),
                   ),
-                ],
-              ),
-              if (!expanded)
-                Padding(
-                  padding: const EdgeInsets.only(left: 24, top: 4),
-                  child: Text(
-                    summary,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: theme.textTheme.bodySmall,
+                if (expanded) ...[
+                  const SizedBox(height: 8),
+                  Padding(
+                    padding: const EdgeInsets.only(left: 45),
+                    child: Text(
+                      summary,
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        fontFamily: 'monospace',
+                        fontSize: 12,
+                      ),
+                    ),
                   ),
-                ),
-              if (expanded) ...[
-                const SizedBox(height: 8),
-                Text(summary, style: theme.textTheme.bodySmall),
-                if (tool != null && tool.artifactRefs.isNotEmpty) ...[
-                  const SizedBox(height: 6),
-                  Wrap(
-                    spacing: 8,
-                    children: [
-                      for (final refId in tool.artifactRefs)
-                        ActionChip(
-                          label: Text(refId.length > 12
-                              ? '${refId.substring(0, 12)}…'
-                              : refId),
-                          onPressed: () {
-                            Navigator.of(context).push(
-                              MaterialPageRoute<void>(
-                                builder: (_) =>
-                                    ArtifactViewerPage(artifactId: refId),
-                              ),
-                            );
-                          },
+                  if (looksLikeChild) ...[
+                    const SizedBox(height: 6),
+                    Padding(
+                      padding: const EdgeInsets.only(left: 45),
+                      child: Text(
+                        'Child Run (read-only linkage — not a separate chat)',
+                        style: theme.textTheme.labelSmall?.copyWith(
+                          color: theme.colorScheme.onSurfaceVariant,
                         ),
-                    ],
-                  ),
+                      ),
+                    ),
+                  ],
+                  if (tool != null && tool.artifactRefs.isNotEmpty) ...[
+                    const SizedBox(height: 8),
+                    Padding(
+                      padding: const EdgeInsets.only(left: 45),
+                      child: Wrap(
+                        spacing: 8,
+                        children: [
+                          for (final refId in tool.artifactRefs)
+                            ActionChip(
+                              avatar: const Icon(Icons.attach_file, size: 14),
+                              label: Text(
+                                refId.length > 12
+                                    ? '${refId.substring(0, 12)}…'
+                                    : refId,
+                              ),
+                              onPressed: () {
+                                if (onOpenArtifact != null) {
+                                  onOpenArtifact!(refId);
+                                }
+                              },
+                            ),
+                        ],
+                      ),
+                    ),
+                  ],
                 ],
               ],
-            ],
+            ),
           ),
         ),
       ),
@@ -317,7 +389,9 @@ class _ToolRow extends StatelessWidget {
 
 /// Wire Transcript into Session detail when a Session is selected.
 class SessionConversationBody extends ConsumerStatefulWidget {
-  const SessionConversationBody({super.key});
+  const SessionConversationBody({super.key, this.onOpenArtifact});
+
+  final ValueChanged<String>? onOpenArtifact;
 
   @override
   ConsumerState<SessionConversationBody> createState() =>
@@ -332,7 +406,6 @@ class _SessionConversationBodyState
   Widget build(BuildContext context) {
     final selected = ref.watch(sessionsControllerProvider).selectedId;
 
-    // Reload durable Transcript when Run leaves Active (Worker SoR).
     ref.listen(sessionRunControllerProvider, (prev, next) {
       final prevStatus = prev?.activeRun?.status;
       final nextStatus = next.activeRun?.status;
@@ -347,36 +420,10 @@ class _SessionConversationBodyState
       return const SizedBox.shrink();
     }
 
-    // Skill chips: tools skill_view / skill_load / skills_list in activity
-    final skillHints = ref
-        .watch(sessionRunControllerProvider)
-        .activity
-        .where((a) => a.contains('skill'))
-        .take(3)
-        .toList();
-
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        if (skillHints.isNotEmpty)
-          Padding(
-            padding: const EdgeInsets.fromLTRB(12, 8, 12, 0),
-            child: Wrap(
-              spacing: 6,
-              children: [
-                for (final h in skillHints)
-                  Chip(
-                    label: Text(h, style: const TextStyle(fontSize: 11)),
-                    visualDensity: VisualDensity.compact,
-                    avatar: const Icon(Icons.extension, size: 14),
-                  ),
-              ],
-            ),
-          ),
-        Expanded(
-          child: TranscriptPane(key: _paneKey, sessionId: selected),
-        ),
-      ],
+    return TranscriptPane(
+      key: _paneKey,
+      sessionId: selected,
+      onOpenArtifact: widget.onOpenArtifact,
     );
   }
 }

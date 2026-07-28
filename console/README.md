@@ -1,7 +1,7 @@
 # Keryx Console
 
 Flutter multi-platform **Console**: thin Principal client of the Worker control plane
-(ADRs 0013–0030, spec `docs/specs/0004-console-1.0.md`).
+(ADRs 0013–0034 messaging IA, spec `docs/specs/0004-console-1.0.md`).
 
 ## Layout
 

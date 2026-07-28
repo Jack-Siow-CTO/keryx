@@ -1,3 +1,5 @@
+import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -45,6 +47,15 @@ final class SecureCredentialsStore implements CredentialsStore {
   })  : _secure = secureStorage ??
             const FlutterSecureStorage(
               aOptions: AndroidOptions(encryptedSharedPreferences: true),
+              // Avoid Data Protection Keychain path that needs extra macOS
+              // entitlements on some debug-signed builds (-34018).
+              mOptions: MacOsOptions(
+                accessibility: KeychainAccessibility.first_unlock,
+                useDataProtectionKeyChain: false,
+              ),
+              iOptions: IOSOptions(
+                accessibility: KeychainAccessibility.first_unlock,
+              ),
             ),
         _prefsOverride = prefs;
 
@@ -59,7 +70,13 @@ final class SecureCredentialsStore implements CredentialsStore {
     final prefs = await _prefs;
     final baseUrl = prefs.getString(_kBaseUrl);
     final biometric = prefs.getBool(_kBiometric) ?? false;
-    final token = await _secure.read(key: _kTokenKey);
+    String? token;
+    try {
+      token = await _secure.read(key: _kTokenKey);
+    } on PlatformException catch (e) {
+      debugPrint('secure storage read failed: ${e.code} ${e.message}');
+      rethrow;
+    }
     if (baseUrl == null ||
         baseUrl.isEmpty ||
         token == null ||
@@ -83,7 +100,16 @@ final class SecureCredentialsStore implements CredentialsStore {
     await prefs.setString(_kBaseUrl, baseUrl.trim());
     await prefs.setBool(_kBiometric, biometricLockEnabled);
     // Token only in secure storage — never prefs.
-    await _secure.write(key: _kTokenKey, value: operatorToken);
+    try {
+      await _secure.write(key: _kTokenKey, value: operatorToken);
+    } on PlatformException catch (e) {
+      // Surface as a clear operator-facing failure (Connect UI shows errorMessage).
+      throw StateError(
+        'Could not store operator token in Keychain '
+        '(${e.code}: ${e.message}). '
+        'On macOS ensure the app is signed and keychain-access-groups is entitled.',
+      );
+    }
   }
 
   @override
@@ -99,7 +125,11 @@ final class SecureCredentialsStore implements CredentialsStore {
     await prefs.remove(_kBiometric);
     // Clear any accidental legacy plaintext token key if present.
     await prefs.remove(_kTokenKey);
-    await _secure.delete(key: _kTokenKey);
+    try {
+      await _secure.delete(key: _kTokenKey);
+    } on PlatformException catch (e) {
+      debugPrint('secure storage delete failed: ${e.code} ${e.message}');
+    }
   }
 }
 

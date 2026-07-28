@@ -15,7 +15,7 @@ enum AuthStatus {
   /// Credentials present; biometric/device lock required.
   locked,
 
-  /// Ready to use dual-rail shell.
+  /// Ready to use messaging shell.
   ready,
 }
 
@@ -156,16 +156,28 @@ class AuthController extends StateNotifier<AuthState> {
           lastConnectivity: result,
           clearError: true,
         );
+      } catch (e) {
+        state = state.copyWith(
+          errorMessage: 'Connectivity check failed: $e',
+        );
+        return null;
       } finally {
         probeClient.close();
       }
     }
 
-    await _store.save(
-      baseUrl: trimmedUrl,
-      operatorToken: trimmedToken,
-      biometricLockEnabled: biometricLockEnabled,
-    );
+    try {
+      await _store.save(
+        baseUrl: trimmedUrl,
+        operatorToken: trimmedToken,
+        biometricLockEnabled: biometricLockEnabled,
+      );
+    } catch (e) {
+      state = state.copyWith(
+        errorMessage: 'Could not save credentials: $e',
+      );
+      return null;
+    }
     _operatorToken = trimmedToken;
     _rebuildClient(trimmedUrl, trimmedToken);
 

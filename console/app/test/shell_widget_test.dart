@@ -5,7 +5,8 @@ import 'package:keryx_console/app.dart';
 import 'package:keryx_console/core/credentials_store.dart';
 import 'package:keryx_console/core/device_lock.dart';
 import 'package:keryx_console/features/auth/auth_controller.dart';
-import 'package:keryx_console/features/shell/dual_rail_shell.dart';
+import 'package:keryx_console/features/shell/messaging_shell.dart';
+import 'package:keryx_console/features/shell/profile_hub.dart';
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
@@ -26,15 +27,15 @@ void main() {
       );
       await tester.pumpAndSettle();
 
-      expect(find.text('Keryx Console'), findsOneWidget);
+      expect(find.text('Keryx'), findsOneWidget);
       expect(find.text('Connect'), findsOneWidget);
       expect(find.text('Worker base URL'), findsOneWidget);
       expect(find.text('Operator token'), findsOneWidget);
     });
   });
 
-  group('dual-rail', () {
-    testWidgets('wide shows Inbox and Sessions rails simultaneously',
+  group('messaging shell', () {
+    testWidgets('wide shows chat list and thread regions simultaneously',
         (tester) async {
       final store = MemoryCredentialsStore();
       await store.save(
@@ -59,14 +60,19 @@ void main() {
       );
       await tester.pumpAndSettle();
 
-      expect(find.byType(DualRailShell), findsOneWidget);
-      // Sessions rail is live list (may show empty/loading/error without Worker).
-      expect(find.text('Sessions'), findsWidgets);
-      expect(find.text('Inbox'), findsWidgets);
+      expect(find.byType(MessagingShell), findsOneWidget);
+      // Chat list home — not dual-rail INBOX + SESSIONS peer rails.
+      expect(find.text('Chats'), findsOneWidget);
+      expect(find.text('Needs you'), findsOneWidget);
+      expect(find.text('SESSIONS'), findsOneWidget);
+      expect(find.text('Select a chat'), findsOneWidget);
+      // Dual-rail permanent Inbox column must not return.
+      expect(find.text('INBOX'), findsNothing);
       expect(find.byType(NavigationBar), findsNothing);
     });
 
-    testWidgets('narrow layout uses bottom navigation', (tester) async {
+    testWidgets('narrow is list-first without dual permanent rails',
+        (tester) async {
       final store = MemoryCredentialsStore();
       await store.save(
         baseUrl: 'http://127.0.0.1:8787',
@@ -90,8 +96,47 @@ void main() {
       );
       await tester.pumpAndSettle();
 
-      expect(find.byType(NavigationBar), findsOneWidget);
-      expect(find.text('Inbox'), findsWidgets);
+      expect(find.byType(MessagingShell), findsOneWidget);
+      expect(find.text('Chats'), findsWidgets);
+      expect(find.text('Needs you'), findsOneWidget);
+      // No dual-rail bottom nav (Inbox | Sessions | More).
+      expect(find.byType(NavigationBar), findsNothing);
+      expect(find.text('Inbox'), findsNothing);
+    });
+
+    testWidgets('profile hub opens Memory / Settings destinations',
+        (tester) async {
+      final store = MemoryCredentialsStore();
+      await store.save(
+        baseUrl: 'http://127.0.0.1:8787',
+        operatorToken: 'test-token',
+        biometricLockEnabled: false,
+      );
+
+      tester.view.physicalSize = const Size(1400, 900);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [
+            credentialsStoreProvider.overrideWithValue(store),
+            deviceLockProvider.overrideWithValue(FakeDeviceLock()),
+          ],
+          child: const KeryxConsoleApp(),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byTooltip('Profile and tools'));
+      await tester.pumpAndSettle();
+
+      expect(find.byType(ProfileHubPage), findsOneWidget);
+      expect(find.text('Memory'), findsOneWidget);
+      expect(find.text('Skills'), findsOneWidget);
+      expect(find.text('Schedules'), findsOneWidget);
+      expect(find.text('Settings'), findsOneWidget);
     });
   });
 
@@ -122,7 +167,7 @@ void main() {
       }
 
       expect(lock.authenticateCalls, greaterThan(0));
-      expect(find.byType(DualRailShell), findsOneWidget);
+      expect(find.byType(MessagingShell), findsOneWidget);
     });
 
     testWidgets('unsupported device lock does not fail-open', (tester) async {
@@ -145,8 +190,7 @@ void main() {
       );
       await tester.pumpAndSettle();
 
-      // Stay locked — never silent-success when unsupported.
-      expect(find.byType(DualRailShell), findsNothing);
+      expect(find.byType(MessagingShell), findsNothing);
       expect(find.textContaining('cannot authenticate'), findsOneWidget);
     });
   });
@@ -171,10 +215,10 @@ void main() {
         ),
       );
       await tester.pumpAndSettle();
-      expect(find.byType(DualRailShell), findsOneWidget);
+      expect(find.byType(MessagingShell), findsOneWidget);
 
       final container = ProviderScope.containerOf(
-        tester.element(find.byType(DualRailShell)),
+        tester.element(find.byType(MessagingShell)),
       );
       await container.read(authControllerProvider.notifier).logout();
       await tester.pumpAndSettle();

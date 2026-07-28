@@ -9,11 +9,11 @@ The long-running Keryx process that accepts work, enforces policy, and delivers 
 _Avoid_: Server, host, agent runtime (when referring to the process itself)
 
 **Session**:
-Durable conversational and policy context that may span multiple Runs (messages, memory pointers, constraints). May carry an operator-facing title and list projection fields (activity, Active root Run summary) for Console; those labels are not a separate aggregate.
-_Avoid_: Conversation, chat, thread (unless UI-facing labels), channel (UI label only)
+Durable conversational and policy context that may span multiple Runs (messages, memory pointers, constraints). In Console, one Session is one chat thread in the messaging list (title, last-message preview, attention badges, Active Run indicators are UI over this aggregate—not a second domain object). New chat creates an empty Session under operator defaults; the first Send starts the first root Run—no mandatory create wizard.
+_Avoid_: Conversation (prefer Session in domain speech), chat/thread (UI-facing labels for Session only), channel (UI label only)
 
 **Run**:
-One bounded execution of the agent loop toward a goal (or until a stop policy fires). Cancelable and budgeted independently of other Runs.
+One bounded execution of the agent loop toward a goal (or until a stop policy fires). Cancelable and budgeted independently of other Runs. In Console, sending a message in an idle Session starts a root Run with that message as the goal; an Active root Run never accepts a silent second root Run—composer exposes wait / cancel / cancel-and-re-run (steer only if the control plane supports it).
 _Avoid_: Job, task, step, turn (a turn may be *inside* a Run)
 
 **Child Run**:
@@ -33,11 +33,11 @@ The Worker-facing API that creates Sessions, starts and cancels Runs, manages Ap
 _Avoid_: Frontend, gateway (the Gateway is messaging, not the control plane)
 
 **Console**:
-The first-party graphical Operator client (mobile and desktop) that drives the control plane as a Principal. Primary day-to-day surface for Sessions, Runs, Approvals, Memory, and Schedules; not a Gateway and not an agent loop host.
-_Avoid_: App (alone), frontend, dashboard, Slack client, chat client, Gateway
+The first-party graphical Operator client (mobile and desktop) that drives the control plane as a Principal. Product metaphor is a messaging client: the home surface is a chat list of Sessions (plus thin system rows for cross-Session attention), not a dual-rail operator cockpit and not a Gateway or agent-loop host. Layout is messenger master–detail (list | thread on wide; stacked on narrow), with an optional contextual third pane for Session info or artifacts—not a permanent Inbox rail or always-on activity column. Global operator surfaces (Memory, Skills, Schedules, Settings) live under a profile/overflow hub; per-Session Policy and Workspace live under Session info on the open chat.
+_Avoid_: App (alone), frontend, dashboard, Slack client, chat client (as the product name), Gateway
 
 **Inbox**:
-The Console attention surface that aggregates cross-Session items that need the Principal now (pending Approvals, failed or interrupted Runs, and similar actionable alerts). Exposed as a control-plane read projection (`GET /v1/inbox`), not a durable notification log or separate write aggregate—items view existing Approvals and Runs.
+The control-plane read projection of cross-Session items that need the Principal now (pending Approvals, failed or interrupted Runs, and similar actionable alerts). In Console it surfaces as a thin system row or service chat in the chat list (and as in-thread attention), not as a peer navigation rail equal to Sessions, and not as a durable notification log or separate write aggregate—items view existing Approvals and Runs.
 _Avoid_: Notifications feed (alone), Activity tab (UI chrome), queue, channel, notification (as a domain entity)
 
 **Edge**:
@@ -57,7 +57,7 @@ The authenticated identity that initiates control-plane actions (create Session,
 _Avoid_: User, account, tenant (until multi-human product needs them)
 
 **Approval**:
-An operator decision required before a high-blast action proceeds (for example exec, skill auto-apply outside trusted context, computer-use outside allowlists).
+An operator decision required before a high-blast action proceeds (for example exec, skill auto-apply outside trusted context, computer-use outside allowlists). In Console: always discoverable via the Inbox (“Needs you”) system row, and when the related Session is open also as a sticky in-thread action card—not list-only, not modal-only as the default.
 _Avoid_: Permission prompt, OAuth consent
 
 **Model provider**:
@@ -81,8 +81,8 @@ Durable, curated knowledge retained across Sessions (facts, preferences, project
 _Avoid_: Vector store, embeddings, RAG (implementation); chat history
 
 **Transcript**:
-The ordered Session history of messages available to subsequent Runs and to Console. User and assistant entries are prose; tool entries are compact structured observations (name, status, summary, artifact references), not unbounded dumps. Distinct from live Run events and from Memory.
-_Avoid_: Chat log, context window (context window is a model limit, not stored state), Memory, event stream
+The ordered Session history of messages available to subsequent Runs and to Console. User and assistant entries are prose; tool entries are compact structured observations (name, status, summary, artifact references), not unbounded dumps. In Console the thread is layered: prose is first-class chat messages; tool/Child-Run/status participation is collapsible activity in the same timeline—not a flat bubble log of every event, and not a separate Chat vs Activity tab as the default. Distinct from live Run events and from Memory.
+_Avoid_: Chat log (as domain term), context window (context window is a model limit, not stored state), Memory, event stream
 
 **Soul**:
 The operator-level personality and standing instructions document loaded into Runs.
