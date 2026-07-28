@@ -1,0 +1,118 @@
+openapi: 3.1.0
+info:
+  title: Keryx Worker Control Plane
+  version: 0.1.0
+  description: |
+    HTTP/SSE control plane for the Keryx Worker. Console is a thin Principal client
+    of this API (ADR 0013, 0019, 0023, 0024). Worker remains the system of record.
+servers:
+  - url: http://127.0.0.1:8787
+    description: Default loopback Worker bind
+security: []
+tags:
+  - name: Health
+  - name: Providers
+  - name: Sessions
+  - name: Runs
+  - name: Approvals
+  - name: Schedules
+paths:
+  /health:
+    get:
+      tags: [Health]
+      operationId: getHealth
+      summary: Liveness probe (unauthenticated)
+      description: |
+        Returns ok when the Worker process is up. Does not validate operator tokens.
+        Console uses this with an authenticated probe to distinguish unreachable vs auth failure.
+      security: []
+      responses:
+        "200":
+          description: Worker is up
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthResponse"
+  /v1/providers:
+    get:
+      tags: [Providers]
+      operationId: listProviders
+      summary: List registered model providers (no secrets)
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Provider catalog
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProvidersResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: operator-token
+      description: Operator token Principal auth (ADR 0004 / 0021). Console stores this in OS secure storage only.
+  responses:
+    Unauthorized:
+      description: Missing or invalid operator token; fail closed
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorBody"
+  schemas:
+    HealthResponse:
+      type: object
+      required: [status]
+      properties:
+        status:
+          type: string
+          enum: [ok]
+    ErrorBody:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: string
+    ProviderInfo:
+      type: object
+      required:
+        - name
+        - auth_kind
+        - display_name
+        - default_model
+        - models
+        - registered
+        - supports_model_override
+      properties:
+        name:
+          type: string
+          description: Provider key (openai, grok, openai_codex, …)
+        auth_kind:
+          type: string
+        display_name:
+          type: string
+        default_model:
+          type: string
+        models:
+          type: array
+          items:
+            type: string
+        registered:
+          type: boolean
+        supports_model_override:
+          type: boolean
+    ProvidersResponse:
+      type: object
+      required: [providers]
+      properties:
+        default:
+          type: string
+          nullable: true
+        providers:
+          type: array
+          items:
+            $ref: "#/components/schemas/ProviderInfo"

@@ -42,3 +42,39 @@ jobs:
           components: rustfmt
       - name: cargo fmt --check
         run: cargo fmt --all -- --check
+
+  # ADR 0024 — path-filter friendly Console jobs (Flutter vs Rust).
+  keryx_api:
+    name: keryx_api (Dart)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: console/packages/keryx_api
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dart-lang/setup-dart@v1
+        with:
+          sdk: stable
+      - name: dart pub get
+        run: dart pub get
+      - name: dart test (Seam 4 contracts)
+        run: dart test
+
+  console:
+    name: console (Flutter)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: console/app
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+      - name: flutter pub get
+        run: flutter pub get
+      - name: flutter analyze
+        run: flutter analyze
+      - name: flutter test
+        run: flutter test

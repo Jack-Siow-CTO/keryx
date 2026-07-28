@@ -9,8 +9,8 @@ The long-running Keryx process that accepts work, enforces policy, and delivers 
 _Avoid_: Server, host, agent runtime (when referring to the process itself)
 
 **Session**:
-Durable conversational and policy context that may span multiple Runs (messages, memory pointers, constraints).
-_Avoid_: Conversation, chat, thread (unless UI-facing labels)
+Durable conversational and policy context that may span multiple Runs (messages, memory pointers, constraints). May carry an operator-facing title and list projection fields (activity, Active root Run summary) for Console; those labels are not a separate aggregate.
+_Avoid_: Conversation, chat, thread (unless UI-facing labels), channel (UI label only)
 
 **Run**:
 One bounded execution of the agent loop toward a goal (or until a stop policy fires). Cancelable and budgeted independently of other Runs.
@@ -31,6 +31,14 @@ _Avoid_: Current job, in-flight task
 **Control plane**:
 The Worker-facing API that creates Sessions, starts and cancels Runs, manages Approvals, Schedules, and Memory, and streams Run events and results. System of record for work.
 _Avoid_: Frontend, gateway (the Gateway is messaging, not the control plane)
+
+**Console**:
+The first-party graphical Operator client (mobile and desktop) that drives the control plane as a Principal. Primary day-to-day surface for Sessions, Runs, Approvals, Memory, and Schedules; not a Gateway and not an agent loop host.
+_Avoid_: App (alone), frontend, dashboard, Slack client, chat client, Gateway
+
+**Inbox**:
+The Console attention surface that aggregates cross-Session items that need the Principal now (pending Approvals, failed or interrupted Runs, and similar actionable alerts). Exposed as a control-plane read projection (`GET /v1/inbox`), not a durable notification log or separate write aggregate—items view existing Approvals and Runs.
+_Avoid_: Notifications feed (alone), Activity tab (UI chrome), queue, channel, notification (as a domain entity)
 
 **Edge**:
 The Tailnet-only reverse proxy that terminates HTTPS and forwards to the Worker's loopback control plane. Not part of the agent domain logic.
@@ -73,8 +81,8 @@ Durable, curated knowledge retained across Sessions (facts, preferences, project
 _Avoid_: Vector store, embeddings, RAG (implementation); chat history
 
 **Transcript**:
-The ordered Session history of messages and tool results available to subsequent Runs.
-_Avoid_: Chat log, context window (context window is a model limit, not stored state), Memory
+The ordered Session history of messages available to subsequent Runs and to Console. User and assistant entries are prose; tool entries are compact structured observations (name, status, summary, artifact references), not unbounded dumps. Distinct from live Run events and from Memory.
+_Avoid_: Chat log, context window (context window is a model limit, not stored state), Memory, event stream
 
 **Soul**:
 The operator-level personality and standing instructions document loaded into Runs.
@@ -103,3 +111,7 @@ _Avoid_: Job row, execution log (alone)
 **Run event**:
 An append-only observation emitted while a Run is Active (model progress, tool boundaries, budgets, terminal status). Clients consume Run events over the control plane stream; the Transcript remains the durable conversational truth.
 _Avoid_: Log line, webhook, notification
+
+**Artifact**:
+Durable bytes produced during a Run (for example terminal capture, patch/diff, or screenshot) stored by the Worker and referenced from Transcript or Run events. Fetched through the control plane under Principal auth; not a Workspace file path and not an inline Transcript dump.
+_Avoid_: Attachment (chat product), blob (implementation), S3 object, media file (alone)
