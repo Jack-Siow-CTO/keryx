@@ -1357,6 +1357,7 @@ where
                                 call.name.clone(),
                                 "error",
                                 summary,
+                                format!("error={summary}"),
                                 vec![],
                             )
                             .with_run_id(run_id),
@@ -1424,10 +1425,7 @@ where
                     {
                         let kind = if call.name.contains("patch") {
                             keryx_domain::ArtifactKind::Diff
-                        } else if matches!(
-                            call.name.as_str(),
-                            "run_terminal" | "shell_exec"
-                        ) {
+                        } else if matches!(call.name.as_str(), "run_terminal" | "shell_exec") {
                             keryx_domain::ArtifactKind::Terminal
                         } else {
                             keryx_domain::ArtifactKind::Text
@@ -1460,6 +1458,8 @@ where
                                 call.name.clone(),
                                 "ok",
                                 result.summary.clone(),
+                                // Full body for agent continuity; Console uses tool.summary + artifacts.
+                                result.content.clone(),
                                 artifact_refs,
                             )
                             .with_run_id(run_id),
@@ -1479,7 +1479,8 @@ where
                             TranscriptMessage::tool_compact(
                                 call.name.clone(),
                                 "error",
-                                summary,
+                                summary.clone(),
+                                format!("error={summary}"),
                                 vec![],
                             )
                             .with_run_id(run_id),

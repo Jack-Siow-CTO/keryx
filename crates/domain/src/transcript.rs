@@ -66,22 +66,27 @@ impl TranscriptMessage {
         Self::stamp(MessageRole::Assistant, content)
     }
 
+    /// Compact Console fields (`tool`) plus full observation body in `content`
+    /// for agent-loop continuity (ADR 0025: compact UI, not truncated model SoR).
     #[must_use]
     pub fn tool_compact(
         name: impl Into<String>,
         status: impl Into<String>,
         summary: impl Into<String>,
+        full_content: impl Into<String>,
         artifact_refs: Vec<String>,
     ) -> Self {
         let name = name.into();
         let status = status.into();
         let summary = summary.into();
+        let full_content = full_content.into();
         Self {
             id: new_message_id(),
             run_id: None,
             created_at: unix_now(),
             role: MessageRole::Tool,
-            content: format!("{name}: {summary}"),
+            // Full tool observation for subsequent model turns / Seam 1 assertions.
+            content: format!("{name}: {full_content}"),
             tool: Some(ToolCompact {
                 name,
                 status,

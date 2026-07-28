@@ -107,7 +107,7 @@ async fn transcript_page_has_structured_messages_newest_first() {
     assert!(messages.len() >= 2, "user + assistant expected");
     // Newest first: assistant typically after user.
     for m in messages {
-        assert!(m["id"].as_str().unwrap().len() > 0);
+        assert!(!m["id"].as_str().unwrap().is_empty());
         assert!(m["created_at"].as_i64().is_some());
         assert!(m.get("role").is_some());
         assert!(m.get("content").is_some());
