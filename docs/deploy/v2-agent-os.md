@@ -9,12 +9,9 @@ Aligned with ADR 0012 and spec 0002. Extends v1 install without discarding SQLit
 | `KERYX_SOUL_PATH` | Operator Soul document (soft-missing) |
 | `KERYX_CONTEXT_FILES` | Colon-separated workspace Context files |
 | `KERYX_SKILLS_ROOT` | Skills package root (`name/SKILL.md`) |
-| `KERYX_ALLOWED_TOOLS` | Includes `run_terminal`, memory, skills, web, … |
+| `KERYX_ALLOWED_TOOLS` | Comma list: workspace FS, web, memory, `run_terminal` (defaults match Worker compose) |
 | `KERYX_TELEGRAM_BOT_TOKEN` | Telegram Gateway (fail closed if invalid) |
-| `KERYX_DISCORD_BOT_TOKEN` | Discord Gateway |
 | `KERYX_DOCKER_IMAGE` | Default Docker image for reduced-origin exec |
-| `KERYX_IMAGE_GEN_API_KEY` | Optional image gen tool registration |
-| `KERYX_TTS_ENABLED` | Telegram-first TTS path |
 | `KERYX_MCP_CONFIG` | Static MCP client servers JSON (restart to apply) — see [mcp-user-capabilities.md](./mcp-user-capabilities.md) |
 | `KERYX_POLICY_EXTRA_TOOLS` | Extra exact tool names for control_plane Policy (comma-separated), including `mcp.<id>.<tool>` |
 
@@ -22,7 +19,7 @@ Long-tail product integrations (Gmail/Slack APIs/HA, …) enter as **MCP client 
 
 ## Approvals
 
-High-blast actions (Soul/Context edits, local terminal, `skill_manage`) create pending Approvals:
+High-blast actions (for example local terminal and MCP high-blast tools) create pending Approvals:
 
 ```bash
 keryx-cli approvals-list
@@ -45,7 +42,7 @@ curl -sS -H "Authorization: Bearer $TOKEN" -H 'content-type: application/json' \
 
 ## Gateways
 
-Telegram/Discord adapters live in `keryx-gateway` and call control-plane ports only (`origin=gateway:*`, reduced Policy). Seam 3 fixture tests require **no live bots**.
+Telegram is the live Gateway on the Worker. Discord exists only as origin/fixture mapping in `keryx-gateway` (no live bot task). Gateways call control-plane ports only (`origin=gateway:*`, reduced Policy). Seam 3 fixture tests require **no live bots**.
 
 ### Telegram (live long-poll on the Worker)
 

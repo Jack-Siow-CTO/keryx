@@ -883,7 +883,6 @@ dependencies = [
  "tempfile",
  "tokio",
  "url",
- "uuid",
  "wiremock",
 ]
 

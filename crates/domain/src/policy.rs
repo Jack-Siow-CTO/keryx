@@ -35,9 +35,10 @@ impl Policy {
 
     /// Default Policy for control-plane origin (trusted operator API).
     ///
-    /// Does **not** auto-include discovered MCP tools (including test fixtures).
+    /// Matches tools the Worker can compose today (workspace FS, web, memory,
+    /// terminal). Does **not** auto-include discovered MCP tools.
     /// Operators add exact `mcp.<server_id>.<tool>` names via
-    /// [`Policy::with_extra_tools`] / Worker `policy_allowlist` + `KERYX_POLICY_EXTRA_TOOLS`.
+    /// [`Policy::with_extra_tools`] / Worker `KERYX_POLICY_EXTRA_TOOLS`.
     /// Seam 1 tests opt in with `ControlPlane::with_control_plane_extra_tools`.
     #[must_use]
     pub fn control_plane_default() -> Self {
@@ -56,25 +57,6 @@ impl Policy {
                 "memory_search".into(),
                 "session_search".into(),
                 "run_terminal".into(),
-                "skills_list".into(),
-                "skill_view".into(),
-                "skill_load".into(),
-                "skill_draft".into(),
-                "skill_manage".into(),
-                "execute_code".into(),
-                "todo".into(),
-                "clarify".into(),
-                "browser_navigate".into(),
-                "browser_snapshot".into(),
-                "browser_click".into(),
-                "browser_type".into(),
-                "browser_wait".into(),
-                "browser_tabs".into(),
-                "computer_screenshot".into(),
-                "computer_click".into(),
-                "computer_type".into(),
-                "vision_describe".into(),
-                "tts_synthesize".into(),
             ]),
         }
     }
@@ -84,7 +66,6 @@ impl Policy {
     /// Read/search/web/memory-read only; no free Memory rewrite or high-blast tools.
     /// Memory mutations from reduced origin are denied (fail closed).
     /// Terminal allowed only with Docker backend (enforced in tool adapter).
-    /// execute_code and skill_manage denied; skill_draft is draft-only.
     /// **No MCP tools** by default (connect ≠ allow; gateways/cron cannot send mail).
     #[must_use]
     pub fn reduced() -> Self {
@@ -98,13 +79,7 @@ impl Policy {
                 "memory_search".into(),
                 "session_search".into(),
                 "run_terminal".into(), // docker-only for reduced origin
-                "skills_list".into(),
-                "skill_view".into(),
-                "skill_load".into(),
-                "skill_draft".into(), // draft only; no silent auto-apply
-                "todo".into(),
-                "clarify".into(),
-                // no execute_code, skill_manage, memory_write, no mcp.*
+                                       // no memory_write, no mcp.*
             ]),
         }
     }
@@ -178,7 +153,6 @@ mod tests {
             assert!(p.allows_tool("memory_search"), "{origin}");
             assert!(p.allows_tool("session_search"), "{origin}");
             assert!(!p.allows_tool("shell_exec"), "{origin}");
-            assert!(!p.allows_tool("execute_code"), "{origin}");
         }
     }
 

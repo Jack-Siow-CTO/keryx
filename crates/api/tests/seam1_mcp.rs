@@ -1,4 +1,4 @@
-//! Seam 1 — browser/computer doubles, MCP mock peer, media stubs (no live vendors).
+//! Seam 1 — MCP client Policy, high-blast Approval, secrets redaction (mock peer; no live vendors).
 
 use keryx_app::{
     ControlPlane, ControlPlaneService, ModelResponse, RunLimits, SessionStore, ToolCall,
@@ -8,8 +8,7 @@ use keryx_domain::{MessageRole, Principal, RunOrigin};
 use keryx_model::FakeModelProvider;
 use keryx_storage::InMemorySessionStore;
 use keryx_tools::{
-    mock_registry_from_peer, BrowserTools, CompositeTools, ComputerUseTools, IsolatedBrowserState,
-    IsolatedDesktop, McpClientRegistry, McpClientTools, McpServerExport, MediaConfig, MediaTools,
+    mock_registry_from_peer, CompositeTools, McpClientRegistry, McpClientTools, McpServerExport,
     MockMcpPeer,
 };
 use serde_json::json;
@@ -33,120 +32,6 @@ async fn wait_done(store: &InMemorySessionStore, id: keryx_domain::RunId) {
         }
         tokio::time::sleep(Duration::from_millis(10)).await;
     }
-}
-
-#[tokio::test]
-async fn browser_isolated_navigate_and_snapshot() {
-    let state = Arc::new(IsolatedBrowserState::new(HashSet::from([
-        "example.com".into()
-    ])));
-    let tools = Arc::new(BrowserTools::new(
-        HashSet::from([
-            "browser_navigate".into(),
-            "browser_snapshot".into(),
-            "browser_tabs".into(),
-        ]),
-        RunOrigin::ControlPlane,
-        state,
-    ));
-    let store = Arc::new(InMemorySessionStore::new());
-    let model = FakeModelProvider::with_script(vec![
-        ModelResponse::with_tool_calls(
-            "",
-            vec![
-                ToolCall {
-                    name: "browser_navigate".into(),
-                    arguments: json!({ "url": "https://example.com/" }),
-                },
-                ToolCall {
-                    name: "browser_snapshot".into(),
-                    arguments: json!({}),
-                },
-            ],
-        ),
-        ModelResponse::text("ok"),
-    ]);
-    let control = Arc::new(ControlPlane::with_tools(
-        Arc::clone(&store),
-        Arc::new(model),
-        RunLimits::default(),
-        tools,
-    ));
-    let p = Principal {
-        id: keryx_domain::PrincipalId::new(PRINCIPAL),
-    };
-    let s = control.create_session(p.clone()).await.unwrap();
-    let run = control
-        .start_run(p, s.id, "browse".into(), None, None)
-        .await
-        .unwrap();
-    wait_done(&store, run.id).await;
-    let t = store.get_transcript(s.id).await.unwrap();
-    assert!(t.messages.iter().any(|m| m.content.contains("isolated")));
-    assert!(t.messages.iter().any(|m| m.content.contains("example.com")));
-}
-
-#[tokio::test]
-async fn computer_use_isolated_and_reduced_denied() {
-    let desk = Arc::new(IsolatedDesktop::new());
-    assert!(!desk.personal_attach_enabled());
-    let tools = Arc::new(ComputerUseTools::new(
-        HashSet::from(["computer_screenshot".into(), "computer_click".into()]),
-        RunOrigin::ControlPlane,
-        desk,
-    ));
-    let store = Arc::new(InMemorySessionStore::new());
-    let model = FakeModelProvider::with_script(vec![
-        ModelResponse::with_tool_calls(
-            "",
-            vec![
-                ToolCall {
-                    name: "computer_screenshot".into(),
-                    arguments: json!({}),
-                },
-                ToolCall {
-                    name: "computer_click".into(),
-                    arguments: json!({ "attach_personal_desktop": true }),
-                },
-            ],
-        ),
-        ModelResponse::text("done"),
-    ]);
-    // Note: computer_click will wait for Approval (high-blast) then deny personal attach.
-    // First screenshot may also wait Approval — approve all pending in background...
-    // Simpler: only screenshot without high_blast wait if we remove computer from high-blast
-    // for screenshot. Currently computer_* requires approval for control_plane.
-    let control = Arc::new(ControlPlane::with_tools(
-        Arc::clone(&store),
-        Arc::new(model),
-        RunLimits::default(),
-        tools,
-    ));
-    let p = Principal {
-        id: keryx_domain::PrincipalId::new(PRINCIPAL),
-    };
-    let s = control.create_session(p.clone()).await.unwrap();
-    // Reduced origin path for deny
-    let run = control
-        .start_run_with_origin(
-            p,
-            s.id,
-            "cu".into(),
-            RunOrigin::gateway("telegram"),
-            None,
-            None,
-        )
-        .await
-        .unwrap();
-    wait_done(&store, run.id).await;
-    let t = store.get_transcript(s.id).await.unwrap();
-    assert!(
-        t.messages
-            .iter()
-            .any(|m| m.content.contains("denied") || m.content.contains("reduced")),
-        "{:?}",
-        t.messages
-    );
 }
 
 #[tokio::test]
@@ -199,74 +84,6 @@ async fn mcp_mock_peer_and_auth_serve() {
         .contains("exported"));
 }
 
-#[tokio::test]
-async fn media_vision_tts_image_gen_gating() {
-    let tools = Arc::new(MediaTools::new(
-        HashSet::from([
-            "vision_describe".into(),
-            "tts_synthesize".into(),
-            "image_gen".into(),
-        ]),
-        MediaConfig {
-            image_gen_api_key: None,
-            tts_enabled: true,
-        },
-    ));
-    let store = Arc::new(InMemorySessionStore::new());
-    let model = FakeModelProvider::with_script(vec![
-        ModelResponse::with_tool_calls(
-            "",
-            vec![
-                ToolCall {
-                    name: "vision_describe".into(),
-                    arguments: json!({ "source": "telegram_photo" }),
-                },
-                ToolCall {
-                    name: "tts_synthesize".into(),
-                    arguments: json!({ "text": "hello" }),
-                },
-                ToolCall {
-                    name: "image_gen".into(),
-                    arguments: json!({ "prompt": "cat", "api_key": "should-not-log" }),
-                },
-            ],
-        ),
-        ModelResponse::text("media"),
-    ]);
-    let control = Arc::new(ControlPlane::with_tools(
-        Arc::clone(&store),
-        Arc::new(model),
-        RunLimits::default(),
-        tools,
-    ));
-    let p = Principal {
-        id: keryx_domain::PrincipalId::new(PRINCIPAL),
-    };
-    let s = control.create_session(p.clone()).await.unwrap();
-    let run = control
-        .start_run(p, s.id, "media".into(), None, None)
-        .await
-        .unwrap();
-    wait_done(&store, run.id).await;
-    let t = store.get_transcript(s.id).await.unwrap();
-    assert!(t.messages.iter().any(|m| m.content.contains("vision")));
-    assert!(t
-        .messages
-        .iter()
-        .any(|m| m.content.contains("tts") || m.content.contains("voice")));
-    assert!(t.messages.iter().any(|m| {
-        m.role == MessageRole::Tool
-            && m.content.contains("image_gen")
-            && (m.content.contains("denied") || m.content.contains("not registered"))
-    }));
-    // Secrets never in transcript body as raw key leakage from our summarizer path is ok to check events separately
-    assert!(!t
-        .messages
-        .iter()
-        .any(|m| m.content.contains("should-not-log")));
-}
-
-/// Config-shaped mock registry → namespaced tools + successful control_plane invoke when Policy allows.
 #[tokio::test]
 async fn mcp_config_mock_register_and_control_plane_invoke() {
     let peer = Arc::new(MockMcpPeer::default().with_tool("echo", "pong-cfg"));
@@ -321,6 +138,7 @@ async fn mcp_config_mock_register_and_control_plane_invoke() {
 }
 
 /// Connect ≠ allow: registered MCP tool not on Policy is denied.
+
 #[tokio::test]
 async fn mcp_connect_not_allow_denies_without_policy() {
     let peer = Arc::new(MockMcpPeer::default().with_tool("search", "hits"));
@@ -370,6 +188,7 @@ async fn mcp_connect_not_allow_denies_without_policy() {
 }
 
 /// Gateway/schedule reduced origin denies MCP by default even if registered + control_plane extras set.
+
 #[tokio::test]
 async fn mcp_reduced_origin_denies_by_default() {
     for origin in [RunOrigin::gateway("telegram"), RunOrigin::Schedule] {
@@ -422,6 +241,7 @@ async fn mcp_reduced_origin_denies_by_default() {
 }
 
 /// High-blast config → Approval path: approve succeeds; deny fails closed.
+
 #[tokio::test]
 async fn mcp_high_blast_approval_approve_and_deny() {
     let peer = Arc::new(MockMcpPeer::default().with_tool("send", "sent-ok"));
@@ -559,6 +379,7 @@ async fn mcp_high_blast_approval_approve_and_deny() {
 }
 
 /// Disconnect fails subsequent invoke closed.
+
 #[tokio::test]
 async fn mcp_disconnect_fails_invoke_closed() {
     let peer = Arc::new(MockMcpPeer::default().with_tool("echo", "pong"));
@@ -629,6 +450,7 @@ async fn mcp_disconnect_fails_invoke_closed() {
 
 /// Secrets absent from tool event summaries (token-like keys → [REDACTED]),
 /// including camelCase `apiKey` after key normalization.
+
 #[tokio::test]
 async fn mcp_secrets_redacted_in_tool_events() {
     let peer = Arc::new(MockMcpPeer::default().with_tool("echo", "ok"));
@@ -703,6 +525,7 @@ async fn mcp_secrets_redacted_in_tool_events() {
 
 /// Catalog ∩ Policy: model tool_calls for allowed MCP succeeds; Policy deny still records failure.
 /// Also asserts FakeModelProvider observed allowlisted MCP names only (not non-allowlisted).
+
 #[tokio::test]
 async fn mcp_catalog_policy_intersection_via_fake_model() {
     let peer = Arc::new(

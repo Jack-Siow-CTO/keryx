@@ -26,7 +26,7 @@ cd console/packages/keryx_api && dart pub get && dart test
 # Console app
 cd console/app && flutter pub get
 flutter test
-flutter run -d macos   # or chrome / ios
+flutter run -d macos   # or ios
 ```
 
 ## Auth (ticket #38)

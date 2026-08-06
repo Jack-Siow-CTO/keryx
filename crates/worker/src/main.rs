@@ -16,7 +16,6 @@ use keryx_tools::{
     WorkspaceFsTools,
 };
 use std::collections::HashSet;
-use std::net::SocketAddr;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
@@ -314,10 +313,7 @@ async fn doctor() -> Result<(), String> {
         Ok(t) if !t.is_empty() => println!("ok   Telegram Gateway token configured"),
         _ => println!("info Telegram Gateway disabled (no KERYX_TELEGRAM_BOT_TOKEN)"),
     }
-    match std::env::var("KERYX_DISCORD_BOT_TOKEN") {
-        Ok(t) if !t.is_empty() => println!("ok   Discord Gateway token configured"),
-        _ => println!("info Discord Gateway disabled (no KERYX_DISCORD_BOT_TOKEN)"),
-    }
+    // Discord live gateway is not wired yet; ignore KERYX_DISCORD_BOT_TOKEN if set.
     match std::process::Command::new("docker")
         .args(["info"])
         .stdout(std::process::Stdio::null())
@@ -551,10 +547,4 @@ async fn shutdown_signal() {
         () = terminate => {},
     }
     info!("shutdown signal received");
-}
-
-/// Used by integration smoke tests to bind an ephemeral loopback port.
-#[allow(dead_code)]
-pub(crate) fn loopback_ephemeral() -> SocketAddr {
-    SocketAddr::from(([127, 0, 0, 1], 0))
 }
