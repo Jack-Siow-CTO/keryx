@@ -321,7 +321,9 @@ async fn agent_tool_spawn_child_under_policy_with_linkage() {
                 .uri(format!("/v1/sessions/{session_id}/runs"))
                 .header("authorization", format!("Bearer {TOKEN}"))
                 .header("content-type", "application/json")
-                .body(Body::from(json!({ "goal": "parent orchestrates" }).to_string()))
+                .body(Body::from(
+                    json!({ "goal": "parent orchestrates" }).to_string(),
+                ))
                 .unwrap(),
         )
         .await
@@ -334,20 +336,22 @@ async fn agent_tool_spawn_child_under_policy_with_linkage() {
         "root has no parent: {parent_body}"
     );
 
-    wait_run_terminal(
-        store.as_ref(),
-        parent_id.parse().expect("parent run id"),
-    )
-    .await;
+    wait_run_terminal(store.as_ref(), parent_id.parse().expect("parent run id")).await;
 
     // Child must exist with linkage via GET Run (control-plane projection).
-    let runs = store.list_runs_for_session(session_id.parse().unwrap()).await.unwrap();
+    let runs = store
+        .list_runs_for_session(session_id.parse().unwrap())
+        .await
+        .unwrap();
     let child = runs
         .iter()
         .find(|r| !r.is_root())
         .expect("agent tool must spawn a Child Run");
     assert_eq!(child.goal, "delegated research");
-    assert_eq!(child.parent_run_id.map(|id| id.to_string()), Some(parent_id.clone()));
+    assert_eq!(
+        child.parent_run_id.map(|id| id.to_string()),
+        Some(parent_id.clone())
+    );
 
     let get_child = app
         .clone()
@@ -601,11 +605,17 @@ async fn reduced_policy_denies_spawn_child_run_tool() {
     );
     let transcript = store.get_transcript(session.id).await.unwrap();
     let denied = transcript.messages.iter().any(|m| {
-        m.tool.as_ref().map(|t| {
-            t.name == "spawn_child_run" && (t.status == "error" || t.summary.contains("denied"))
-        }).unwrap_or(false)
+        m.tool
+            .as_ref()
+            .map(|t| {
+                t.name == "spawn_child_run" && (t.status == "error" || t.summary.contains("denied"))
+            })
+            .unwrap_or(false)
     });
-    assert!(denied, "expected Policy deny on spawn_child_run for reduced origin");
+    assert!(
+        denied,
+        "expected Policy deny on spawn_child_run for reduced origin"
+    );
 }
 
 #[tokio::test]
