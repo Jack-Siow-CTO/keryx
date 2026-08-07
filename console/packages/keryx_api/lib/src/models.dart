@@ -351,6 +351,7 @@ final class RunRecord {
       );
 }
 
+/// Control-plane Approval (OpenAPI `ApprovalResponse`).
 final class ApprovalRecord {
   const ApprovalRecord({
     required this.id,
@@ -366,9 +367,13 @@ final class ApprovalRecord {
   final String runId;
   final String action;
   final String summary;
+  /// One of: pending, approved, denied.
   final String status;
   final String requestedBy;
   final String? decidedBy;
+
+  bool get isPending => status == 'pending';
+  bool get isResolved => status == 'approved' || status == 'denied';
 
   factory ApprovalRecord.fromJson(Map<String, dynamic> json) => ApprovalRecord(
         id: json['id'] as String,
@@ -379,6 +384,38 @@ final class ApprovalRecord {
         requestedBy: json['requested_by'] as String,
         decidedBy: json['decided_by'] as String?,
       );
+
+  Map<String, dynamic> toJson() => {
+        'id': id,
+        'run_id': runId,
+        'action': action,
+        'summary': summary,
+        'status': status,
+        'requested_by': requestedBy,
+        'decided_by': decidedBy,
+      };
+}
+
+/// `GET /v1/approvals` body (OpenAPI `ApprovalsListResponse`).
+final class ApprovalsListResponse {
+  const ApprovalsListResponse({required this.approvals});
+
+  final List<ApprovalRecord> approvals;
+
+  factory ApprovalsListResponse.fromJson(Map<String, dynamic> json) {
+    final raw = json['approvals'];
+    if (raw is! List) {
+      throw const FormatException(
+        'ApprovalsListResponse.approvals must be a list',
+      );
+    }
+    return ApprovalsListResponse(
+      approvals: raw
+          .whereType<Map>()
+          .map((e) => ApprovalRecord.fromJson(Map<String, dynamic>.from(e)))
+          .toList(),
+    );
+  }
 }
 
 final class InboxItem {

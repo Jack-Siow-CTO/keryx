@@ -242,35 +242,47 @@ class KeryxApiClient {
     }
   }
 
+  /// `GET /v1/approvals` — Principal Approval queue (default pending only).
   Future<List<ApprovalRecord>> listApprovals({bool pending = true}) async {
+    final path = Uri(
+      path: '/v1/approvals',
+      queryParameters: {'pending': '$pending'},
+    ).toString();
     final response = await _send(
       method: 'GET',
-      path: '/v1/approvals?pending=$pending',
+      path: path,
       authenticated: true,
     );
-    final obj = _decodeObject(response.body);
-    final raw = obj['approvals'] ?? obj;
-    final list = raw is List ? raw : (obj['items'] as List? ?? const []);
-    return list
-        .whereType<Map>()
-        .map((e) => ApprovalRecord.fromJson(Map<String, dynamic>.from(e)))
-        .toList();
+    return ApprovalsListResponse.fromJson(_decodeObject(response.body))
+        .approvals;
   }
 
-  Future<ApprovalRecord> approveApproval(String id) async {
+  /// `GET /v1/approvals/{approval_id}`.
+  Future<ApprovalRecord> getApproval(String approvalId) async {
+    final response = await _send(
+      method: 'GET',
+      path: '/v1/approvals/$approvalId',
+      authenticated: true,
+    );
+    return ApprovalRecord.fromJson(_decodeObject(response.body));
+  }
+
+  /// `POST /v1/approvals/{approval_id}/approve` — Principal authority.
+  Future<ApprovalRecord> approveApproval(String approvalId) async {
     final response = await _send(
       method: 'POST',
-      path: '/v1/approvals/$id/approve',
+      path: '/v1/approvals/$approvalId/approve',
       authenticated: true,
       body: <String, dynamic>{},
     );
     return ApprovalRecord.fromJson(_decodeObject(response.body));
   }
 
-  Future<ApprovalRecord> denyApproval(String id) async {
+  /// `POST /v1/approvals/{approval_id}/deny` — Principal authority.
+  Future<ApprovalRecord> denyApproval(String approvalId) async {
     final response = await _send(
       method: 'POST',
-      path: '/v1/approvals/$id/deny',
+      path: '/v1/approvals/$approvalId/deny',
       authenticated: true,
       body: <String, dynamic>{},
     );

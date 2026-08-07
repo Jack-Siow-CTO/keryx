@@ -236,20 +236,24 @@ void main() {
     });
   });
 
-  group('sticky Approval', () {
-    testWidgets('shows Approve/Deny when Inbox has pending for Session',
-        (tester) async {
-      final session = _session(pending: 1);
-      final item = InboxItem(
-        id: 'i1',
-        kind: 'approval_pending',
-        sessionId: session.id,
-        approvalId: 'a1',
-        title: 'Allow exec',
-        summary: 'run rm -rf /tmp/x',
-        createdAt: 1,
-      );
+  /// Messaging-day Approvals path (ADR 0033 / checklist line 1 Approvals half).
+  ///
+  /// Same pending Approval is sticky in open Session and under Needs you.
+  group('messaging-day Approvals (sticky + Needs you)', () {
+    final session = _session(pending: 1);
+    final pendingItem = InboxItem(
+      id: 'approval:a1',
+      kind: 'approval_pending',
+      sessionId: session.id,
+      runId: 'r1',
+      approvalId: 'a1',
+      title: 'Allow exec',
+      summary: 'run rm -rf /tmp/x',
+      createdAt: 1,
+    );
 
+    testWidgets('sticky card shows Approve/Deny for open Session pending',
+        (tester) async {
       await tester.pumpWidget(
         _wrap(
           const StickyApprovalCard(),
@@ -260,35 +264,82 @@ void main() {
                 SessionsState(sessions: [session], selectedId: session.id),
               ),
             ),
-            inboxProvider.overrideWith((ref) async => [item]),
+            inboxProvider.overrideWith((ref) async => [pendingItem]),
           ],
         ),
       );
       await tester.pumpAndSettle();
 
       expect(find.text('Allow exec'), findsOneWidget);
+      expect(find.text('run rm -rf /tmp/x'), findsOneWidget);
       expect(find.text('Approve'), findsOneWidget);
       expect(find.text('Deny'), findsOneWidget);
+      expect(find.text('Approval'), findsOneWidget);
     });
-  });
 
-  group('Needs you', () {
-    testWidgets('renders Inbox projection items', (tester) async {
-      const item = InboxItem(
-        id: 'i1',
+    testWidgets('sticky card hides when pending belongs to another Session',
+        (tester) async {
+      const other = InboxItem(
+        id: 'approval:a2',
         kind: 'approval_pending',
-        sessionId: 's1',
-        approvalId: 'a1',
-        title: 'Needs approval',
-        summary: 'high blast',
+        sessionId: 'other-session',
+        approvalId: 'a2',
+        title: 'Other session Approval',
+        summary: 'not this thread',
         createdAt: 1,
       );
+      // Open session has no pending count and inbox item is for another Session.
+      final idle = _session(pending: 0);
 
+      await tester.pumpWidget(
+        _wrap(
+          const StickyApprovalCard(),
+          [
+            sessionsControllerProvider.overrideWith(
+              (ref) => FakeSessionsController(
+                ref,
+                SessionsState(sessions: [idle], selectedId: idle.id),
+              ),
+            ),
+            inboxProvider.overrideWith((ref) async => [other]),
+          ],
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.text('Other session Approval'), findsNothing);
+      expect(find.text('Approve'), findsNothing);
+    });
+
+    testWidgets('sticky shows count fallback when projection pending but Inbox lag',
+        (tester) async {
+      await tester.pumpWidget(
+        _wrap(
+          const StickyApprovalCard(),
+          [
+            sessionsControllerProvider.overrideWith(
+              (ref) => FakeSessionsController(
+                ref,
+                SessionsState(sessions: [session], selectedId: session.id),
+              ),
+            ),
+            inboxProvider.overrideWith((ref) async => const <InboxItem>[]),
+          ],
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.textContaining('1 pending Approval'), findsOneWidget);
+      expect(find.text('Approve'), findsNothing);
+    });
+
+    testWidgets('Needs you surfaces same pending Approval with actions',
+        (tester) async {
       await tester.pumpWidget(
         _wrap(
           const NeedsYouPane(),
           [
-            inboxProvider.overrideWith((ref) async => [item]),
+            inboxProvider.overrideWith((ref) async => [pendingItem]),
             sessionsControllerProvider.overrideWith(
               (ref) => FakeSessionsController(ref, const SessionsState()),
             ),
@@ -298,9 +349,23 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(find.text('Needs you'), findsOneWidget);
-      expect(find.text('Needs approval'), findsOneWidget);
+      expect(find.text('Allow exec'), findsOneWidget);
+      expect(find.text('run rm -rf /tmp/x'), findsOneWidget);
       expect(find.text('Approve'), findsOneWidget);
+      expect(find.text('Deny'), findsOneWidget);
+      expect(find.text('Open chat'), findsOneWidget);
     });
+
+    test(
+      'dual surface shares approval_id and session_id (contract golden)',
+      () {
+        // Same InboxItem feeds sticky filter and Needs you list — not two SoRs.
+        expect(pendingItem.kind, 'approval_pending');
+        expect(pendingItem.approvalId, 'a1');
+        expect(pendingItem.sessionId, session.id);
+        expect(session.pendingApprovalCount, 1);
+      },
+    );
   });
 
   group('layered timeline', () {

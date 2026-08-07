@@ -8,9 +8,10 @@ import '../auth/auth_controller.dart';
 import '../inbox/inbox_screen.dart';
 import 'sessions_controller.dart';
 
-/// Sticky Approve/Deny card for the open Session (ADR 0033, ticket #61).
+/// Sticky Approve/Deny card for the open Session (ADR 0033, ticket #81).
 ///
 /// Dual surface with Needs you list row — not list-only, not full-app modal-only.
+/// Approve/Deny use control-plane Principal bearer via [KeryxApiClient].
 class StickyApprovalCard extends ConsumerWidget {
   const StickyApprovalCard({super.key});
 
