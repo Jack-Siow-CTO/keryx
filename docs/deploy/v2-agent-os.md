@@ -30,11 +30,14 @@ keryx-cli deny <id>
 
 ## Schedules
 
+**Always-on ticker:** while the Worker serves (including under systemd), an in-process loop ticks due Schedules on `KERYX_SCHEDULE_TICK_SECS` (default 30). Production does not need an external cron or manual tick. Fired Runs use origin `schedule` and the frozen `policy_tools` snapshot stored at create (default = reduced allowlist).
+
 ```bash
-# HTTP
+# HTTP create (optional policy_tools freezes a custom allowlist)
 curl -sS -H "Authorization: Bearer $TOKEN" -H 'content-type: application/json' \
-  -d '{"goal":"briefing","interval_secs":3600,"next_fire_at":…}' \
+  -d '{"goal":"briefing","interval_secs":3600,"next_fire_at":…,"policy_tools":["read_file"]}' \
   http://127.0.0.1:8787/v1/schedules
+# Deterministic tick for tests / ops debug only (production uses always-on ticker)
 curl -sS -H "Authorization: Bearer $TOKEN" -H 'content-type: application/json' \
   -d '{"now":…}' http://127.0.0.1:8787/v1/schedules/tick
 ```

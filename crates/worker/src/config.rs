@@ -51,6 +51,7 @@ impl WorkerConfig {
     /// | `KERYX_POLICY_EXTRA_TOOLS` | Comma-separated exact tool names for control_plane Policy |
     /// | `KERYX_SKILLS_ROOT` | Skills package root (default `./skills`) |
     /// | `KERYX_SKILL_AUTO_COMMIT` | `1`/`true` enables trusted auto-apply (factory OFF) |
+    /// | `KERYX_SCHEDULE_TICK_SECS` | Always-on Schedule ticker period (default 30; min 1) |
     /// | `OPENAI_*` / `XAI_*` / `CHATGPT_*` / `GROK_WEB_*` | Model provider secrets — see registry |
     pub fn from_env() -> Result<Self, String> {
         let bind = parse_bind(env::var("KERYX_BIND").ok())?;

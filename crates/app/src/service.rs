@@ -136,6 +136,106 @@ where
     pub fn event_hub(&self) -> Arc<RunEventHub> {
         Arc::clone(&self.events)
     }
+
+    /// Start a root Run with optional frozen Policy snapshot (Schedule fire path).
+    ///
+    /// When `policy_override` is set, the agent loop uses that allowlist instead of
+    /// re-deriving from origin + live Worker extras. Schedule fire freezes
+    /// `policy_tools` at authoring time so later template or config changes do not
+    /// expand or shrink unattended authority.
+    #[allow(clippy::too_many_arguments)] // root Run start: origin, provider/model, optional freeze
+    async fn start_run_inner(
+        &self,
+        principal: Principal,
+        session_id: SessionId,
+        goal: String,
+        origin: RunOrigin,
+        provider: Option<String>,
+        model_id: Option<String>,
+        policy_override: Option<Policy>,
+    ) -> Result<Run, AppError>
+    where
+        S: 'static,
+        M: 'static,
+    {
+        let mut session = self
+            .store
+            .get_session(session_id)
+            .await
+            .map_err(AppError::Store)?
+            .ok_or(AppError::SessionNotFound)?;
+
+        let (run, cancel, principal_id) = {
+            let mut active = self.active.lock().await;
+            if let Some(existing) = active.active_for_session(session.id) {
+                return Err(AppError::ActiveRunExists {
+                    session_id: session.id,
+                    run_id: existing,
+                });
+            }
+            if active.active_count() >= self.limits.global_active_cap {
+                return Err(AppError::GlobalCapExceeded {
+                    cap: self.limits.global_active_cap,
+                });
+            }
+
+            let principal_id = principal.id.clone();
+            let run =
+                Run::start_with_origin(session.id, principal_id.clone(), goal.clone(), origin);
+            self.store
+                .create_run(run.clone())
+                .await
+                .map_err(AppError::Store)?;
+            // Touch Session activity for list projection ordering.
+            session.touch();
+            let _ = self.store.update_session(session.clone()).await;
+            let cancel = active.register(session.id, run.id);
+            (run, cancel, principal_id)
+        };
+
+        let store = Arc::clone(&self.store);
+        let model = Arc::clone(&self.model);
+        let tools = Arc::clone(&self.tools);
+        let events = Arc::clone(&self.events);
+        let active = Arc::clone(&self.active);
+        let approvals = Arc::clone(&self.approvals);
+        let budgets = self.limits.default_budgets.clone();
+        let run_context = self.run_context.clone();
+        let control_plane_extra_tools = self.control_plane_extra_tools.clone();
+        let high_blast_tools = self.high_blast_tools.clone();
+        let skill_auto_commit = self.skill_auto_commit;
+        let run_id = run.id;
+        let run_session = run.session_id;
+        let run_origin = run.origin.clone();
+
+        tokio::spawn(async move {
+            let _ = execute_agent_loop(
+                store,
+                model,
+                tools,
+                events,
+                active,
+                approvals,
+                run_id,
+                run_session,
+                principal_id,
+                goal,
+                run_origin,
+                provider,
+                model_id,
+                budgets,
+                run_context,
+                control_plane_extra_tools,
+                high_blast_tools,
+                skill_auto_commit,
+                policy_override,
+                cancel,
+            )
+            .await;
+        });
+
+        Ok(run)
+    }
 }
 
 /// Object-safe control-plane surface used by the HTTP adapter (and Seam 1 tests).
@@ -354,83 +454,11 @@ where
         provider: Option<String>,
         model_id: Option<String>,
     ) -> Result<Run, AppError> {
-        let mut session = self
-            .store
-            .get_session(session_id)
-            .await
-            .map_err(AppError::Store)?
-            .ok_or(AppError::SessionNotFound)?;
-
-        let (run, cancel, principal_id) = {
-            let mut active = self.active.lock().await;
-            if let Some(existing) = active.active_for_session(session.id) {
-                return Err(AppError::ActiveRunExists {
-                    session_id: session.id,
-                    run_id: existing,
-                });
-            }
-            if active.active_count() >= self.limits.global_active_cap {
-                return Err(AppError::GlobalCapExceeded {
-                    cap: self.limits.global_active_cap,
-                });
-            }
-
-            let principal_id = principal.id.clone();
-            let run =
-                Run::start_with_origin(session.id, principal_id.clone(), goal.clone(), origin);
-            self.store
-                .create_run(run.clone())
-                .await
-                .map_err(AppError::Store)?;
-            // Touch Session activity for list projection ordering.
-            session.touch();
-            let _ = self.store.update_session(session.clone()).await;
-            let cancel = active.register(session.id, run.id);
-            (run, cancel, principal_id)
-        };
-
-        let store = Arc::clone(&self.store);
-        let model = Arc::clone(&self.model);
-        let tools = Arc::clone(&self.tools);
-        let events = Arc::clone(&self.events);
-        let active = Arc::clone(&self.active);
-        let approvals = Arc::clone(&self.approvals);
-        let budgets = self.limits.default_budgets.clone();
-        let run_context = self.run_context.clone();
-        let control_plane_extra_tools = self.control_plane_extra_tools.clone();
-        let high_blast_tools = self.high_blast_tools.clone();
-        let skill_auto_commit = self.skill_auto_commit;
-        let run_id = run.id;
-        let run_session = run.session_id;
-        let run_origin = run.origin.clone();
-
-        tokio::spawn(async move {
-            let _ = execute_agent_loop(
-                store,
-                model,
-                tools,
-                events,
-                active,
-                approvals,
-                run_id,
-                run_session,
-                principal_id,
-                goal,
-                run_origin,
-                provider,
-                model_id,
-                budgets,
-                run_context,
-                control_plane_extra_tools,
-                high_blast_tools,
-                skill_auto_commit,
-                None, // root: derive Policy from origin + extras
-                cancel,
-            )
-            .await;
-        });
-
-        Ok(run)
+        // Root path without frozen snapshot: derive Policy from origin + extras.
+        self.start_run_inner(
+            principal, session_id, goal, origin, provider, model_id, None,
+        )
+        .await
     }
 
     async fn get_run(&self, run_id: RunId) -> Result<Run, AppError> {
@@ -570,15 +598,19 @@ where
                 schedule.session_id = Some(session.id);
                 session.id
             };
-            // Start Run with origin=schedule (reduced Policy via origin).
+            // Frozen Policy at authoring time (default = reduced allowlist).
+            // Applied as policy_override so fire does not re-derive from live templates.
+            let frozen_policy =
+                Policy::deny_all().with_extra_tools(schedule.policy_tools.iter().cloned());
             match self
-                .start_run_with_origin(
+                .start_run_inner(
                     principal,
                     session_id,
                     schedule.goal.clone(),
                     RunOrigin::Schedule,
                     None,
                     None,
+                    Some(frozen_policy),
                 )
                 .await
             {

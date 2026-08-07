@@ -5,7 +5,7 @@ mod config;
 use clap::{Parser, Subcommand};
 use config::WorkerConfig;
 use keryx_api::{router, AppState, OperatorTokenTable, ProviderCatalog, ProviderInfo};
-use keryx_app::{ControlPlane, DenyAllTools, RunContextConfig, SessionStore};
+use keryx_app::{ControlPlane, ControlPlaneService, DenyAllTools, RunContextConfig, SessionStore};
 use keryx_domain::{Principal, PrincipalId, RunOrigin};
 use keryx_gateway::{run_telegram_long_poll, ChatAllowlist};
 use keryx_model::{register_from_env, RegisteredProviders};
@@ -129,6 +129,15 @@ async fn run() -> Result<(), String> {
     let state = AppState::with_providers(control, tokens, catalog)
         .with_console_paths(skills_root, artifacts_dir);
     let app = router(state);
+
+    // Always-on Schedule ticker: fires due Schedules without external manual tick.
+    // POST /v1/schedules/tick remains for Seam 1 / operator tests with a fixed clock.
+    // Host proof under systemd is checklist line 7 host half (#80).
+    let control_for_ticker = Arc::clone(&control_for_gateway);
+    let tick_interval = schedule_tick_interval_from_env();
+    tokio::spawn(async move {
+        run_schedule_ticker(control_for_ticker, tick_interval).await;
+    });
 
     // Telegram Gateway long-poll (optional; fail closed if token invalid at getMe).
     if let Ok(tg_token) = std::env::var("KERYX_TELEGRAM_BOT_TOKEN") {
@@ -547,6 +556,58 @@ fn build_tools(
         return Arc::new(DenyAllTools);
     }
     Arc::new(composite)
+}
+
+/// Interval for the always-on Schedule ticker (`KERYX_SCHEDULE_TICK_SECS`, default 30).
+fn schedule_tick_interval_from_env() -> Duration {
+    let secs = std::env::var("KERYX_SCHEDULE_TICK_SECS")
+        .ok()
+        .and_then(|s| s.parse::<u64>().ok())
+        .filter(|s| *s >= 1)
+        .unwrap_or(30);
+    Duration::from_secs(secs)
+}
+
+/// Wall-clock unix epoch seconds for Schedule fire (production path).
+fn wall_clock_epoch_secs() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
+}
+
+/// Always-on loop: tick due Schedules while the Worker is serving.
+///
+/// Under systemd, this is the production fire path (no external cron/tick HTTP).
+/// Tests use `POST /v1/schedules/tick` with a deterministic `now` instead.
+async fn run_schedule_ticker<S, M>(control: Arc<ControlPlane<S, M>>, interval: Duration)
+where
+    S: SessionStore + 'static,
+    M: keryx_app::ModelProvider + 'static,
+{
+    info!(
+        interval_secs = interval.as_secs(),
+        "schedule ticker starting (always-on)"
+    );
+    let mut ticker = tokio::time::interval(interval);
+    // First tick completes immediately; skip so fire waits one full interval after boot
+    // (due Schedules still fire on the first real period; restart miss is covered by
+    // next_fire_at + is_due semantics).
+    ticker.tick().await;
+    loop {
+        ticker.tick().await;
+        let now = wall_clock_epoch_secs();
+        match control.tick_schedules(now).await {
+            Ok(runs) if !runs.is_empty() => {
+                info!(
+                    count = runs.len(),
+                    now, "schedule ticker fired Run(s) with origin=schedule"
+                );
+            }
+            Ok(_) => {}
+            Err(e) => warn!(error = %e, now, "schedule ticker tick failed"),
+        }
+    }
 }
 
 async fn shutdown_signal() {
