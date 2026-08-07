@@ -273,7 +273,7 @@ void main() {
   group('Child Runs are not Session contacts', () {
     testWidgets('chat list only shows Session rows, never Child Run rows',
         (tester) async {
-      final session = SessionSummary(
+      const session = SessionSummary(
         id: 's1',
         principalId: 'p1',
         title: 'Demo chat',
@@ -281,7 +281,7 @@ void main() {
         createdAt: 1,
         updatedAt: 1,
         lastMessagePreview: 'hello',
-        activeRootRun: const ActiveRootRunSummary(
+        activeRootRun: ActiveRootRunSummary(
           id: 'r1',
           goal: 'working with children',
           origin: 'control_plane',
