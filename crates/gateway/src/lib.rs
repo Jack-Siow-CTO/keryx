@@ -365,10 +365,9 @@ pub mod telegram {
         let text = msg.text.trim();
         let (approve, rest) = if let Some(r) = text.strip_prefix("/approve") {
             (true, r)
-        } else if let Some(r) = text.strip_prefix("/deny") {
-            (false, r)
         } else {
-            return None;
+            let r = text.strip_prefix("/deny")?;
+            (false, r)
         };
         let id = rest.trim();
         if id.is_empty() || ApprovalId::from_str(id).is_err() {
@@ -497,11 +496,15 @@ mod tests {
         }
     }
 
+    type TestGw =
+        GatewayRuntime<ControlPlane<InMemorySessionStore, FakeModelProvider>, RecordingTransport>;
+    type TestControl = ControlPlane<InMemorySessionStore, FakeModelProvider>;
+
     fn harness() -> (
         Arc<InMemorySessionStore>,
-        Arc<ControlPlane<InMemorySessionStore, FakeModelProvider>>,
+        Arc<TestControl>,
         Arc<RecordingTransport>,
-        GatewayRuntime<ControlPlane<InMemorySessionStore, FakeModelProvider>, RecordingTransport>,
+        TestGw,
     ) {
         let store = Arc::new(InMemorySessionStore::new());
         let model = Arc::new(FakeModelProvider::with_fixed_content("tg reply"));
@@ -622,16 +625,17 @@ mod tests {
             .unwrap();
         assert_eq!(n, 2);
 
-        let sent = transport.sent.lock().unwrap();
-        assert_eq!(sent.len(), 2);
-        for msg in sent.iter() {
-            assert_eq!(msg.approval_id.as_deref(), Some(a.id.to_string().as_str()));
-            assert!(msg.text.contains("Needs you"));
-            assert!(msg.text.contains("write_file"));
-            assert!(msg.text.contains(&a.id.to_string()));
+        {
+            let sent = transport.sent.lock().unwrap();
+            assert_eq!(sent.len(), 2);
+            for msg in sent.iter() {
+                assert_eq!(msg.approval_id.as_deref(), Some(a.id.to_string().as_str()));
+                assert!(msg.text.contains("Needs you"));
+                assert!(msg.text.contains("write_file"));
+                assert!(msg.text.contains(&a.id.to_string()));
+            }
         }
         // Second poll does not re-notify the same Approval.
-        drop(sent);
         let n2 = gw.notify_pending_approvals(&["42".into()]).await.unwrap();
         assert_eq!(n2, 0);
     }

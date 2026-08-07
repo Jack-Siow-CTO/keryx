@@ -1125,6 +1125,7 @@ where
 }
 
 /// Agent-tool path: Policy-gated spawn under the current root Run.
+#[allow(clippy::too_many_arguments)] // Shared orchestration deps + spawn args; private helper.
 async fn invoke_spawn_child_run_tool<S, M>(
     store: Arc<S>,
     model: Arc<M>,
