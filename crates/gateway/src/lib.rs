@@ -236,6 +236,9 @@ where
     ///
     /// Fail closed for non-allowlisted chats. Does not escalate Policy: `approve` only resolves
     /// the pending Approval; Run origin / reduced Policy stay on the control plane.
+    ///
+    /// Always answers the Telegram callback (when present) and sends a short chat reply so a
+    /// button tap never looks like a no-op — including already-decided Approvals.
     pub async fn handle_approval_decision(
         &self,
         decision: ApprovalDecision,
@@ -246,44 +249,94 @@ where
             return Err(GatewayError::SecretsFailClosed);
         }
         if !allowlist.allows(&decision.chat_id) {
+            let _ = feedback_decision(
+                self.transport.as_ref(),
+                &decision,
+                "Not allowed",
+                "this bot is private (chat not allowlisted)",
+            )
+            .await;
             return Err(GatewayError::ChatNotAllowlisted);
         }
         let approval_id = ApprovalId::from_str(&decision.approval_id)
             .map_err(|e| GatewayError::Other(format!("invalid approval id: {e}")))?;
 
-        let approval = if decision.approve {
+        let result = if decision.approve {
             self.control
                 .approve(self.principal.clone(), approval_id)
-                .await?
+                .await
         } else {
-            self.control
-                .deny(self.principal.clone(), approval_id)
-                .await?
+            self.control.deny(self.principal.clone(), approval_id).await
         };
 
-        if let Some(cb) = decision.callback_query_id.as_deref() {
-            let ack = if decision.approve {
-                "Approved"
-            } else {
-                "Denied"
-            };
-            let _ = self.transport.answer_callback(cb, ack).await;
+        match result {
+            Ok(approval) => {
+                let status = if decision.approve {
+                    "approved"
+                } else {
+                    "denied"
+                };
+                let toast = if decision.approve {
+                    "Approved"
+                } else {
+                    "Denied"
+                };
+                let _ = feedback_decision(
+                    self.transport.as_ref(),
+                    &decision,
+                    toast,
+                    &format!("Approval {status}: {} ({})", approval.action, approval.id),
+                )
+                .await;
+                Ok(approval)
+            }
+            Err(AppError::ApprovalNotPending) => {
+                let status = self
+                    .control
+                    .get_approval(approval_id)
+                    .await
+                    .ok()
+                    .map(|a| match a.status {
+                        ApprovalStatus::Approved => "already approved",
+                        ApprovalStatus::Denied => "already denied",
+                        ApprovalStatus::Pending => "not pending",
+                    })
+                    .unwrap_or("already decided or missing");
+                let _ = feedback_decision(
+                    self.transport.as_ref(),
+                    &decision,
+                    "Already decided",
+                    &format!(
+                        "Approval {} — {} ({})",
+                        status,
+                        decision.approval_id,
+                        if decision.approve { "Approve" } else { "Deny" }
+                    ),
+                )
+                .await;
+                Err(GatewayError::Control(AppError::ApprovalNotPending))
+            }
+            Err(AppError::ApprovalNotFound) => {
+                let _ = feedback_decision(
+                    self.transport.as_ref(),
+                    &decision,
+                    "Not found",
+                    &format!("Approval not found ({})", decision.approval_id),
+                )
+                .await;
+                Err(GatewayError::Control(AppError::ApprovalNotFound))
+            }
+            Err(e) => {
+                let _ = feedback_decision(
+                    self.transport.as_ref(),
+                    &decision,
+                    "Failed",
+                    &format!("Could not apply Approval: {e}"),
+                )
+                .await;
+                Err(e.into())
+            }
         }
-
-        let status = if decision.approve {
-            "approved"
-        } else {
-            "denied"
-        };
-        let _ = self
-            .transport
-            .send(OutboundMessage::text(
-                decision.chat_id,
-                format!("Approval {status}: {} ({})", approval.action, approval.id),
-            ))
-            .await;
-
-        Ok(approval)
     }
 
     /// Known chat ids with a Session mapping (for open allowlist notify fan-out).
@@ -304,6 +357,24 @@ pub fn format_approval_notice(approval: &Approval) -> String {
          Approve or Deny below.",
         approval.action, approval.summary, approval.id, approval.run_id
     )
+}
+
+/// Always ack a callback (if any) and post a chat line — button taps must not be silent.
+async fn feedback_decision<T: PlatformTransport + ?Sized>(
+    transport: &T,
+    decision: &ApprovalDecision,
+    toast: &str,
+    chat_text: &str,
+) {
+    if let Some(cb) = decision.callback_query_id.as_deref() {
+        let _ = transport.answer_callback(cb, toast).await;
+    }
+    let _ = transport
+        .send(OutboundMessage::text(
+            decision.chat_id.clone(),
+            chat_text.to_string(),
+        ))
+        .await;
 }
 
 /// Telegram wire mapping helpers (fixture payloads; no live Bot API).
@@ -735,7 +806,49 @@ mod tests {
             control.get_approval(a.id).await.unwrap().status,
             ApprovalStatus::Pending
         );
-        assert!(transport.sent.lock().unwrap().is_empty());
+        // Fail-closed still posts feedback so the button is not silent.
+        let sent = transport.sent.lock().unwrap();
+        assert_eq!(sent.len(), 1);
+        assert!(sent[0].text.contains("not allowlisted"));
+    }
+
+    #[tokio::test]
+    async fn already_decided_callback_answers_and_explains() {
+        let (store, control, transport, gw) = harness();
+        let a = seed_pending(&store, "write_file", "path=x").await;
+        let allow = ChatAllowlist::from_ids(["42"]);
+        // First decide succeeds.
+        control
+            .approve(operator(), a.id)
+            .await
+            .expect("first approve");
+
+        let update = json!({
+            "callback_query": {
+                "id": "cq-stale",
+                "data": format!("a:{}", a.id),
+                "message": { "chat": { "id": 42 } }
+            }
+        });
+        let decision = telegram::parse_callback_query(&update).unwrap();
+        let err = gw
+            .handle_approval_decision(decision, &allow, "secret-bot-token")
+            .await
+            .unwrap_err();
+        assert!(matches!(
+            err,
+            GatewayError::Control(AppError::ApprovalNotPending)
+        ));
+        // Toast + chat line so the tap is not silent.
+        assert_eq!(transport.callbacks.lock().unwrap().len(), 1);
+        assert_eq!(transport.callbacks.lock().unwrap()[0].1, "Already decided");
+        let sent = transport.sent.lock().unwrap();
+        assert_eq!(sent.len(), 1);
+        assert!(
+            sent[0].text.contains("already approved") || sent[0].text.contains("already decided"),
+            "got {}",
+            sent[0].text
+        );
     }
 
     #[tokio::test]

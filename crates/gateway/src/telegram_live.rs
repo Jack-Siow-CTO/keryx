@@ -289,6 +289,9 @@ async fn notify_pending_approvals_live<C: ControlPlaneService>(
 }
 
 /// Resolve in-chat Approve/Deny through the control plane as `principal`.
+///
+/// Always answers the callback (when present) and posts a chat line so a button
+/// tap never looks like a no-op — including already-decided Approvals.
 async fn handle_approval_decision_live<C: ControlPlaneService>(
     control: &C,
     transport: &TelegramBotApi,
@@ -301,6 +304,13 @@ async fn handle_approval_decision_live<C: ControlPlaneService>(
             chat_id = %decision.chat_id,
             "telegram approval decide from non-allowlisted chat; ignored"
         );
+        let _ = feedback_live(
+            transport,
+            &decision,
+            "Not allowed",
+            "this bot is private (chat not allowlisted)",
+        )
+        .await;
         return Err(GatewayError::ChatNotAllowlisted);
     }
     let approval_id = decision
@@ -308,33 +318,96 @@ async fn handle_approval_decision_live<C: ControlPlaneService>(
         .parse()
         .map_err(|e| GatewayError::Other(format!("invalid approval id: {e}")))?;
 
-    let approval = if decision.approve {
-        control.approve(principal.clone(), approval_id).await?
+    let result = if decision.approve {
+        control.approve(principal.clone(), approval_id).await
     } else {
-        control.deny(principal.clone(), approval_id).await?
+        control.deny(principal.clone(), approval_id).await
     };
 
-    if let Some(cb) = decision.callback_query_id.as_deref() {
-        let ack = if decision.approve {
-            "Approved"
-        } else {
-            "Denied"
-        };
-        let _ = transport.answer_callback(cb, ack).await;
+    match result {
+        Ok(approval) => {
+            let status = if decision.approve {
+                "approved"
+            } else {
+                "denied"
+            };
+            let toast = if decision.approve {
+                "Approved"
+            } else {
+                "Denied"
+            };
+            feedback_live(
+                transport,
+                &decision,
+                toast,
+                &format!("Approval {status}: {} ({})", approval.action, approval.id),
+            )
+            .await?;
+            Ok(())
+        }
+        Err(keryx_app::AppError::ApprovalNotPending) => {
+            let status = control
+                .get_approval(approval_id)
+                .await
+                .ok()
+                .map(|a| match a.status {
+                    keryx_domain::ApprovalStatus::Approved => "already approved",
+                    keryx_domain::ApprovalStatus::Denied => "already denied",
+                    keryx_domain::ApprovalStatus::Pending => "not pending",
+                })
+                .unwrap_or("already decided or missing");
+            let _ = feedback_live(
+                transport,
+                &decision,
+                "Already decided",
+                &format!(
+                    "Approval {} — {} (button was stale or already decided)",
+                    status, decision.approval_id
+                ),
+            )
+            .await;
+            Err(GatewayError::Control(
+                keryx_app::AppError::ApprovalNotPending,
+            ))
+        }
+        Err(keryx_app::AppError::ApprovalNotFound) => {
+            let _ = feedback_live(
+                transport,
+                &decision,
+                "Not found",
+                &format!("Approval not found ({})", decision.approval_id),
+            )
+            .await;
+            Err(GatewayError::Control(keryx_app::AppError::ApprovalNotFound))
+        }
+        Err(e) => {
+            let _ = feedback_live(
+                transport,
+                &decision,
+                "Failed",
+                &format!("Could not apply Approval: {e}"),
+            )
+            .await;
+            Err(e.into())
+        }
     }
+}
 
-    let status = if decision.approve {
-        "approved"
-    } else {
-        "denied"
-    };
+async fn feedback_live(
+    transport: &TelegramBotApi,
+    decision: &ApprovalDecision,
+    toast: &str,
+    chat_text: &str,
+) -> Result<(), GatewayError> {
+    if let Some(cb) = decision.callback_query_id.as_deref() {
+        let _ = transport.answer_callback(cb, toast).await;
+    }
     transport
         .send(OutboundMessage::text(
-            decision.chat_id,
-            format!("Approval {status}: {} ({})", approval.action, approval.id),
+            decision.chat_id.clone(),
+            chat_text.to_string(),
         ))
-        .await?;
-    Ok(())
+        .await
 }
 
 /// Process one inbound Telegram message through control plane and reply with Run result.

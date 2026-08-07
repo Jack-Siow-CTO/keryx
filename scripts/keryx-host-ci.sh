@@ -260,8 +260,10 @@ print("ok" if sys.argv[1] in ids and sys.argv[2] in ids else "missing")
   }
   echo "  control plane lists pending Approvals"
 
-  # Live notify to allowlisted chat (same wire as Gateway Away Approvals notify).
-  local markup notify_body notify_resp
+  # Live notify proves Bot API markup shape for Away Approvals (same wire as Gateway).
+  # Label host-ci and strip the keyboard after control-plane decide so operators are not
+  # left with dead Approve buttons that return "approval is not pending" on tap.
+  local markup notify_body notify_resp message_id
   markup="$(python3 -c "
 import json,sys
 aid=sys.argv[1]
@@ -276,7 +278,7 @@ print(json.dumps({
 import json,sys
 print(json.dumps({
   'chat_id': sys.argv[1],
-  'text': 'Needs you — Approval pending\\naction: run_terminal\\nsummary: host-ci approve probe\\nid: '+sys.argv[2]+'\\nrun: '+sys.argv[3]+'\\nApprove or Deny below.',
+  'text': '[host-ci] Away Approvals probe (auto-resolves — do not tap)\\naction: run_terminal\\nsummary: host-ci approve probe\\nid: '+sys.argv[2]+'\\nrun: '+sys.argv[3],
   'reply_markup': json.loads(sys.argv[4]),
 }))
 " "$chat_id" "$approval_a" "$run_id" "$markup")"
@@ -287,7 +289,16 @@ print(json.dumps({
     echo "Telegram sendMessage notify failed"
     return 1
   }
-  python3 -c 'import json,sys; d=json.load(sys.stdin); assert d.get("ok") is True, d; print("  live notify to allowlisted chat ok")' <<<"$notify_resp" || return 1
+  message_id="$(python3 -c '
+import json,sys
+d=json.load(sys.stdin)
+assert d.get("ok") is True, d
+mid=(d.get("result") or {}).get("message_id")
+assert mid is not None, d
+print(mid)
+print("  live notify to allowlisted chat ok", file=sys.stderr)
+' <<<"$notify_resp")" || return 1
+  echo "  live notify message_id=$message_id"
 
   # Approve (SoR) — continues without Policy escalate (decide only resolves the row).
   local decided
@@ -310,6 +321,26 @@ d=json.load(sys.stdin)
 assert d.get("status")=="denied", d
 print("  deny status=denied (fail closed)")
 ' <<<"$decided" || return 1
+
+  # Remove inline keyboard + rewrite body so host-ci leave no clickable dead buttons.
+  local edit_body edit_resp
+  edit_body="$(python3 -c "
+import json,sys
+print(json.dumps({
+  'chat_id': sys.argv[1],
+  'message_id': int(sys.argv[2]),
+  'text': '[host-ci] Away Approvals probe — auto-resolved (approved+denied via control plane). Keyboard removed.',
+  'reply_markup': {'inline_keyboard': []},
+}))
+" "$chat_id" "$message_id")"
+  edit_resp="$(curl -fsS --max-time 20 \
+    -X POST "https://api.telegram.org/bot${KERYX_TELEGRAM_BOT_TOKEN}/editMessageText" \
+    -H 'content-type: application/json' \
+    -d "$edit_body")" || {
+    echo "Telegram editMessageText (strip keyboard) failed"
+    return 1
+  }
+  python3 -c 'import json,sys; d=json.load(sys.stdin); assert d.get("ok") is True, d; print("  host-ci notify keyboard stripped")' <<<"$edit_resp" || return 1
 
   # Non-allowlisted: closed allowlist is enforced by Gateway (empty ALLOWED_CHAT_IDS rejected above).
   # Double-check env is not open.
