@@ -117,7 +117,9 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
               controller: _urlController,
               decoration: const InputDecoration(
                 labelText: 'Worker base URL',
-                hintText: 'https://keryx.tailnet.ts.net',
+                // Edge is :8443 on jack-agent-worker (not host/T3 :443). See docs/deploy/tailnet-edge.md.
+                hintText: 'https://host.tailnet.ts.net:8443',
+                helperText: 'Tailnet Edge includes :8443 — not host :443',
               ),
               keyboardType: TextInputType.url,
               autocorrect: false,

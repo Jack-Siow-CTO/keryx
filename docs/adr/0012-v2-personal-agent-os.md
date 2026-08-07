@@ -29,3 +29,4 @@ v1 proved a secure, durable Worker spine. Hermes-class personal use needs depth 
 - ADR 0005’s “no exec / no browser” is **v1**, not the v2 target.
 - Glossary gains Gateway, Memory, Skill, Soul, Schedule, Child Run, Run origin, Approval (see `CONTEXT.md`).
 - Implementation should land as a sequenced program of work; this ADR freezes *product decisions*, not a single mega-PR.
+- **Current ship bar:** [ADR 0035](0035-daily-use-core-ship-bar.md) freezes **daily-use core** as the livable bar. This ADR stays long-term ambition; it is not the next-ship gate by itself.

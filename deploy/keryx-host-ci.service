@@ -1,0 +1,22 @@
+# User systemd oneshot for the required host CI job (ADR 0035).
+# Install:
+#   install -m 755 scripts/keryx-host-ci.sh ~/.local/bin/keryx-host-ci.sh
+#   install -m 644 deploy/keryx-host-ci.service ~/.config/systemd/user/
+#   install -m 644 deploy/keryx-host-ci.timer ~/.config/systemd/user/
+#   systemctl --user daemon-reload
+#   systemctl --user enable --now keryx-host-ci.timer
+#
+# Scenarios may stay red until product tickets land; shell must exist.
+# Set KERYX_HOST_CI_STRICT=1 to fail on Telegram / Schedule host scenarios.
+# After a second tailnet node proves Edge :8443 health + auth challenge:
+#   export KERYX_EDGE_SECOND_NODE_OK=1  (in ~/.config/keryx/env)
+
+[Unit]
+Description=Keryx daily-use host CI job (ADR 0035)
+After=network-online.target keryx.service
+Wants=keryx.service
+
+[Service]
+Type=oneshot
+ExecStart=%h/.local/bin/keryx-host-ci.sh
+Nice=10

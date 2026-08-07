@@ -57,7 +57,7 @@ The authenticated identity that initiates control-plane actions (create Session,
 _Avoid_: User, account, tenant (until multi-human product needs them)
 
 **Approval**:
-An operator decision required before a high-blast action proceeds (for example exec, skill auto-apply outside trusted context, computer-use outside allowlists). In Console: always discoverable via the Inbox (“Needs you”) system row, and when the related Session is open also as a sticky in-thread action card—not list-only, not modal-only as the default.
+An operator decision required before a high-blast action proceeds (for example exec, skill auto-apply outside trusted context, computer-use outside allowlists). The control plane is system of record. Console: always discoverable via the Inbox (“Needs you”) system row, and when the related Session is open also as a sticky in-thread action card—not list-only, not modal-only as the default. Telegram Gateway (allowlisted chats): may notify and accept Approve/Deny for pending Approvals as the operator Principal; that path does not expand reduced Policy for gateway-origin Runs.
 _Avoid_: Permission prompt, OAuth consent
 
 **Model provider**:

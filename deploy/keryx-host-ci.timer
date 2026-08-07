@@ -1,0 +1,13 @@
+# Periodic trigger for deploy/keryx-host-ci.service (user systemd).
+
+[Unit]
+Description=Run Keryx host CI periodically
+
+[Timer]
+OnBootSec=5m
+OnUnitActiveSec=6h
+Persistent=true
+Unit=keryx-host-ci.service
+
+[Install]
+WantedBy=timers.target

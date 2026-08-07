@@ -107,7 +107,8 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
               children: [
                 const ConsoleSectionLabel('Connection'),
                 Text(
-                  'Worker base URL and operator token. Token stays in Keychain or Keystore only.',
+                  'Worker base URL and operator token. Token stays in Keychain or Keystore only. '
+                  'On jack-agent-worker use the Tailnet Edge URL with port :8443 (not host/T3 :443).',
                   style: theme.textTheme.bodySmall,
                 ),
                 const SizedBox(height: 16),
@@ -115,6 +116,8 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                   controller: _urlController,
                   decoration: const InputDecoration(
                     labelText: 'Worker base URL',
+                    hintText: 'https://host.tailnet.ts.net:8443',
+                    helperText: 'Edge :8443 — not host :443',
                   ),
                   autocorrect: false,
                 ),

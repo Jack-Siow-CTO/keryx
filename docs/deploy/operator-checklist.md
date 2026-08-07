@@ -67,12 +67,15 @@ curl -sS http://127.0.0.1:8787/health
 
 ## Level 5 — Tailnet remote (optional)
 
-Follow [tailnet-edge.md](./tailnet-edge.md).
+Follow [tailnet-edge.md](./tailnet-edge.md). **Edge URL includes port `:8443`** when that is the live site (not host/T3 `:443`).
 
 - [ ] Caddy (or equivalent) on Tailscale IPs only → `127.0.0.1:8787`
-- [ ] Health over HTTPS from Mac/phone
+- [ ] Health over HTTPS from a **second** tailnet node at `https://<host>:8443/health`
+- [ ] Unauthenticated control-plane call returns **401** (auth challenge) from that second node
+- [ ] Console / client base URL is the **`:8443` Edge URL** (document for operators)
 - [ ] Authenticated Session + Run over Tailnet
 - [ ] No Funnel / public expose
+- [ ] Host CI shell installed (`scripts/keryx-host-ci.sh` + user timer) — scenarios may stay red until product tickets land
 
 ## Ready when
 

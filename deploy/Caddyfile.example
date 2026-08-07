@@ -1,12 +1,21 @@
-# Example Tailnet-only edge for Keryx.
+# Example Tailnet-only Edge for Keryx (daily-use default port :8443).
 # Prereq: Worker installed and healthy on 127.0.0.1:8787
 # See docs/deploy/tailnet-edge.md
 #
 # Replace:
 #   keryx.your-tailnet.ts.net  — MagicDNS or hostname
 #   100.x.y.z                  — this host's Tailscale IPv4
+#   [fd7a:…]                  — optional Tailscale IPv6
+#
+# Port :8443 is intentional when host :443 is already used (e.g. T3 app).
+# Console / operators must set base URL to https://…:8443 — not bare :443.
 
-https://keryx.your-tailnet.ts.net {
+{
+	admin off
+	auto_https disable_redirects
+}
+
+https://keryx.your-tailnet.ts.net:8443 {
 	bind 100.x.y.z
 	reverse_proxy 127.0.0.1:8787
 }
