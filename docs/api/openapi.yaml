@@ -166,11 +166,127 @@ paths:
     get:
       tags: [Sessions]
       operationId: listInbox
-      summary: Inbox projection
-      security: [{bearerAuth: []}]
+      summary: Inbox projection (Needs you)
+      description: |
+        Cross-Session attention items for Console “Needs you”: pending Approvals
+        (kind approval_pending with approval_id) plus failed/interrupted root Runs.
+        Items view existing Approvals and Runs; Inbox is not a write aggregate.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 50
+            maximum: 200
       responses:
         "200":
           description: Inbox items
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/InboxResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+  /v1/approvals:
+    get:
+      tags: [Approvals]
+      operationId: listApprovals
+      summary: List Approvals
+      description: |
+        Principal Approval queue. Default pending=true returns only pending Approvals
+        (Console sticky / Needs you source). Pass pending=false for all statuses.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: pending
+          in: query
+          description: When true (default), only pending Approvals
+          schema:
+            type: boolean
+            default: true
+      responses:
+        "200":
+          description: Approvals list
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApprovalsListResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+  /v1/approvals/{approval_id}:
+    get:
+      tags: [Approvals]
+      operationId: getApproval
+      summary: Get one Approval
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ApprovalId"
+      responses:
+        "200":
+          description: Approval
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApprovalResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /v1/approvals/{approval_id}/approve:
+    post:
+      tags: [Approvals]
+      operationId: approveApproval
+      summary: Approve a pending Approval
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ApprovalId"
+      responses:
+        "200":
+          description: Updated Approval (status approved)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApprovalResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          description: Approval is not pending
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+  /v1/approvals/{approval_id}/deny:
+    post:
+      tags: [Approvals]
+      operationId: denyApproval
+      summary: Deny a pending Approval
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ApprovalId"
+      responses:
+        "200":
+          description: Updated Approval (status denied)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApprovalResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          description: Approval is not pending
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
   /v1/memory:
     get:
       tags: [Sessions]
@@ -285,6 +401,13 @@ components:
   parameters:
     SessionId:
       name: session_id
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    ApprovalId:
+      name: approval_id
       in: path
       required: true
       schema:
@@ -467,4 +590,86 @@ components:
         next_before:
           type: string
           nullable: true
+    ApprovalResponse:
+      type: object
+      required:
+        - id
+        - run_id
+        - action
+        - summary
+        - status
+        - requested_by
+      properties:
+        id:
+          type: string
+          format: uuid
+        run_id:
+          type: string
+          format: uuid
+        action:
+          type: string
+          description: Tool or action name (e.g. write_file, shell_exec)
+        summary:
+          type: string
+          description: Redacted summary safe for control-plane listing
+        status:
+          type: string
+          enum: [pending, approved, denied]
+        requested_by:
+          type: string
+          description: Principal that created the wait (Run initiator)
+        decided_by:
+          type: string
+          nullable: true
+          description: Principal that approved or denied (when resolved)
+    ApprovalsListResponse:
+      type: object
+      required: [approvals]
+      properties:
+        approvals:
+          type: array
+          items:
+            $ref: "#/components/schemas/ApprovalResponse"
+    InboxItem:
+      type: object
+      required:
+        - id
+        - kind
+        - title
+        - summary
+        - created_at
+      properties:
+        id:
+          type: string
+          description: Projection row id (e.g. approval:{uuid}, run:{uuid})
+        kind:
+          type: string
+          enum: [approval_pending, run_failed, run_interrupted]
+        session_id:
+          type: string
+          nullable: true
+        run_id:
+          type: string
+          nullable: true
+        approval_id:
+          type: string
+          nullable: true
+          description: |
+            Set when kind is approval_pending. Links Inbox “Needs you” rows to
+            GET /v1/approvals/{approval_id} and approve/deny.
+        title:
+          type: string
+        summary:
+          type: string
+        created_at:
+          type: integer
+          format: int64
+    InboxResponse:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/InboxItem"
 

@@ -38,6 +38,7 @@ pub fn router(state: AppState) -> Router {
         .route("/v1/runs/{run_id}/events", get(stream_run_events))
         .route("/v1/providers", get(list_providers))
         .route("/v1/approvals", get(list_approvals))
+        .route("/v1/approvals/{approval_id}", get(get_approval))
         .route(
             "/v1/approvals/{approval_id}/approve",
             post(approve_approval),
@@ -413,6 +414,17 @@ async fn list_approvals(
     Ok(Json(ApprovalsListResponse {
         approvals: approvals.into_iter().map(Into::into).collect(),
     }))
+}
+
+async fn get_approval(
+    State(state): State<AppState>,
+    AuthPrincipal(_principal): AuthPrincipal,
+    Path(approval_id): Path<String>,
+) -> Result<Json<ApprovalResponse>, ApiError> {
+    let id = ApprovalId::from_str(&approval_id)
+        .map_err(|_| ApiError::bad_request("invalid approval id"))?;
+    let approval = state.control.get_approval(id).await?;
+    Ok(Json(approval.into()))
 }
 
 async fn approve_approval(

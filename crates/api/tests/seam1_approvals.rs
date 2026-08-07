@@ -165,6 +165,39 @@ async fn high_blast_wait_then_approve_allows_write() {
     let run_id = body_json(start).await["id"].as_str().unwrap().to_string();
 
     let approval_id = wait_pending_approval(&app).await;
+
+    let get = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!("/v1/approvals/{approval_id}"))
+                .header("authorization", format!("Bearer {TOKEN}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(get.status(), StatusCode::OK);
+    let got = body_json(get).await;
+    assert_eq!(got["id"], approval_id);
+    assert_eq!(got["status"], "pending");
+    assert_eq!(got["action"], "write_file");
+    assert!(got["requested_by"].is_string());
+    assert!(got["decided_by"].is_null());
+
+    let missing = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v1/approvals/00000000-0000-4000-8000-000000000000")
+                .header("authorization", format!("Bearer {TOKEN}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(missing.status(), StatusCode::NOT_FOUND);
+
     let approve = app
         .clone()
         .oneshot(
