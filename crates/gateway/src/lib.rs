@@ -1,6 +1,7 @@
 //! Gateway adapters: messaging platforms → control-plane Sessions/Runs.
 //!
 //! Gateways never own the agent loop; they call app ports only (Seam 3).
+//! Telegram Approvals: notify + in-chat Approve/Deny as operator Principal (#77 / #68).
 
 mod telegram_live;
 
@@ -8,9 +9,12 @@ pub use telegram_live::{run_telegram_long_poll, ChatAllowlist, ChatSessionMap, T
 
 use async_trait::async_trait;
 use keryx_app::{AppError, ControlPlaneService};
-use keryx_domain::{Principal, Run, RunOrigin, Session, SessionId};
+use keryx_domain::{
+    Approval, ApprovalId, ApprovalStatus, Principal, Run, RunOrigin, Session, SessionId,
+};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+use std::str::FromStr;
 use std::sync::Arc;
 use thiserror::Error;
 use tokio::sync::Mutex;
@@ -20,6 +24,8 @@ use tokio::sync::Mutex;
 pub enum GatewayError {
     #[error("gateway secrets missing or invalid")]
     SecretsFailClosed,
+    #[error("chat not allowlisted (fail closed)")]
+    ChatNotAllowlisted,
     #[error("control plane: {0}")]
     Control(#[from] AppError),
     #[error("gateway: {0}")]
@@ -40,12 +46,59 @@ pub struct InboundMessage {
 pub struct OutboundMessage {
     pub chat_id: String,
     pub text: String,
+    /// When set, transport attaches Approve/Deny controls for this Approval id.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub approval_id: Option<String>,
+}
+
+impl OutboundMessage {
+    #[must_use]
+    pub fn text(chat_id: impl Into<String>, text: impl Into<String>) -> Self {
+        Self {
+            chat_id: chat_id.into(),
+            text: text.into(),
+            approval_id: None,
+        }
+    }
+
+    #[must_use]
+    pub fn approval_notice(
+        chat_id: impl Into<String>,
+        text: impl Into<String>,
+        approval_id: impl Into<String>,
+    ) -> Self {
+        Self {
+            chat_id: chat_id.into(),
+            text: text.into(),
+            approval_id: Some(approval_id.into()),
+        }
+    }
+}
+
+/// In-chat Approve/Deny decision from a Gateway surface (Telegram callback or command).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ApprovalDecision {
+    pub chat_id: String,
+    pub approval_id: String,
+    pub approve: bool,
+    /// Telegram `callback_query.id` when decision came from an inline button.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub callback_query_id: Option<String>,
 }
 
 /// Platform protocol adapter (Telegram Bot API fixtures, Discord wire fixtures).
 #[async_trait]
 pub trait PlatformTransport: Send + Sync {
     async fn send(&self, msg: OutboundMessage) -> Result<(), GatewayError>;
+
+    /// Acknowledge a Telegram callback query (no-op for non-Telegram transports).
+    async fn answer_callback(
+        &self,
+        _callback_query_id: &str,
+        _text: &str,
+    ) -> Result<(), GatewayError> {
+        Ok(())
+    }
 }
 
 /// Shared Gateway orchestration over the control plane (no shadow agent loop).
@@ -56,6 +109,8 @@ pub struct GatewayRuntime<C, T> {
     bot_secret: String,
     /// chat_id → SessionId for multi-turn continuity.
     chat_sessions: Mutex<HashMap<String, SessionId>>,
+    /// Approval ids already notified this process (no Telegram-only lifecycle).
+    notified_approvals: Mutex<HashSet<String>>,
 }
 
 impl<C, T> GatewayRuntime<C, T>
@@ -80,7 +135,14 @@ where
             principal,
             bot_secret,
             chat_sessions: Mutex::new(HashMap::new()),
+            notified_approvals: Mutex::new(HashSet::new()),
         })
+    }
+
+    /// Operator Principal used for control-plane acts (Session, Run, Approval decide).
+    #[must_use]
+    pub fn principal(&self) -> &Principal {
+        &self.principal
     }
 
     /// Handle one inbound update: create/continue Session, start Run with gateway origin.
@@ -124,12 +186,124 @@ where
         text: impl Into<String>,
     ) -> Result<(), GatewayError> {
         self.transport
-            .send(OutboundMessage {
-                chat_id: chat_id.into(),
-                text: text.into(),
-            })
+            .send(OutboundMessage::text(chat_id, text))
             .await
     }
+
+    /// Notify `target_chats` about operator-wide pending Approvals not yet notified.
+    ///
+    /// Surfaces **all** pending Approvals (not only chat-mapped Sessions). Control plane remains
+    /// system of record; this is a Gateway notify surface only. Does not add Telegram-only
+    /// Approval timeouts.
+    ///
+    /// Returns how many notify messages were sent.
+    pub async fn notify_pending_approvals(
+        &self,
+        target_chats: &[String],
+    ) -> Result<usize, GatewayError> {
+        if target_chats.is_empty() {
+            return Ok(0);
+        }
+        let pending = self.control.list_approvals(true).await?;
+        let mut sent = 0usize;
+        for approval in pending {
+            if approval.status != ApprovalStatus::Pending {
+                continue;
+            }
+            let id = approval.id.to_string();
+            {
+                let mut notified = self.notified_approvals.lock().await;
+                if !notified.insert(id.clone()) {
+                    continue;
+                }
+            }
+            let text = format_approval_notice(&approval);
+            for chat_id in target_chats {
+                self.transport
+                    .send(OutboundMessage::approval_notice(
+                        chat_id.clone(),
+                        text.clone(),
+                        id.clone(),
+                    ))
+                    .await?;
+                sent += 1;
+            }
+        }
+        Ok(sent)
+    }
+
+    /// Record Approve/Deny via control plane as the operator Principal.
+    ///
+    /// Fail closed for non-allowlisted chats. Does not escalate Policy: `approve` only resolves
+    /// the pending Approval; Run origin / reduced Policy stay on the control plane.
+    pub async fn handle_approval_decision(
+        &self,
+        decision: ApprovalDecision,
+        allowlist: &ChatAllowlist,
+        provided_secret: &str,
+    ) -> Result<Approval, GatewayError> {
+        if provided_secret != self.bot_secret {
+            return Err(GatewayError::SecretsFailClosed);
+        }
+        if !allowlist.allows(&decision.chat_id) {
+            return Err(GatewayError::ChatNotAllowlisted);
+        }
+        let approval_id = ApprovalId::from_str(&decision.approval_id)
+            .map_err(|e| GatewayError::Other(format!("invalid approval id: {e}")))?;
+
+        let approval = if decision.approve {
+            self.control
+                .approve(self.principal.clone(), approval_id)
+                .await?
+        } else {
+            self.control
+                .deny(self.principal.clone(), approval_id)
+                .await?
+        };
+
+        if let Some(cb) = decision.callback_query_id.as_deref() {
+            let ack = if decision.approve {
+                "Approved"
+            } else {
+                "Denied"
+            };
+            let _ = self.transport.answer_callback(cb, ack).await;
+        }
+
+        let status = if decision.approve {
+            "approved"
+        } else {
+            "denied"
+        };
+        let _ = self
+            .transport
+            .send(OutboundMessage::text(
+                decision.chat_id,
+                format!("Approval {status}: {} ({})", approval.action, approval.id),
+            ))
+            .await;
+
+        Ok(approval)
+    }
+
+    /// Known chat ids with a Session mapping (for open allowlist notify fan-out).
+    pub async fn known_chat_ids(&self) -> Vec<String> {
+        self.chat_sessions.lock().await.keys().cloned().collect()
+    }
+}
+
+/// Redacted notice body for a pending Approval (safe for chat).
+#[must_use]
+pub fn format_approval_notice(approval: &Approval) -> String {
+    format!(
+        "Needs you — Approval pending\n\
+         action: {}\n\
+         summary: {}\n\
+         id: {}\n\
+         run: {}\n\
+         Approve or Deny below.",
+        approval.action, approval.summary, approval.id, approval.run_id
+    )
 }
 
 /// Telegram wire mapping helpers (fixture payloads; no live Bot API).
@@ -162,6 +336,85 @@ pub mod telegram {
             chat_id,
             text,
             external_user,
+        })
+    }
+
+    /// Parse inline-button callback_query into an [`ApprovalDecision`].
+    ///
+    /// Callback data wire: `a:<approval_id>` or `d:<approval_id>` (≤64 bytes).
+    pub fn parse_callback_query(update: &Value) -> Result<ApprovalDecision, GatewayError> {
+        let cq = update
+            .get("callback_query")
+            .ok_or_else(|| GatewayError::Other("missing callback_query".into()))?;
+        let chat_id = cq
+            .get("message")
+            .and_then(|m| m.get("chat"))
+            .and_then(|c| c.get("id"))
+            .map(|id| id.to_string())
+            .ok_or_else(|| GatewayError::Other("missing callback chat.id".into()))?;
+        let data = cq
+            .get("data")
+            .and_then(Value::as_str)
+            .ok_or_else(|| GatewayError::Other("missing callback data".into()))?;
+        let callback_query_id = cq.get("id").and_then(Value::as_str).map(str::to_string);
+        parse_decision_data(data, chat_id, callback_query_id)
+    }
+
+    /// Parse text command `/approve <id>` or `/deny <id>` (and bare `approve`/`deny` forms).
+    pub fn parse_decision_command(msg: &InboundMessage) -> Option<ApprovalDecision> {
+        let text = msg.text.trim();
+        let (approve, rest) = if let Some(r) = text.strip_prefix("/approve") {
+            (true, r)
+        } else if let Some(r) = text.strip_prefix("/deny") {
+            (false, r)
+        } else {
+            return None;
+        };
+        let id = rest.trim();
+        if id.is_empty() || ApprovalId::from_str(id).is_err() {
+            return None;
+        }
+        Some(ApprovalDecision {
+            chat_id: msg.chat_id.clone(),
+            approval_id: id.to_string(),
+            approve,
+            callback_query_id: None,
+        })
+    }
+
+    fn parse_decision_data(
+        data: &str,
+        chat_id: String,
+        callback_query_id: Option<String>,
+    ) -> Result<ApprovalDecision, GatewayError> {
+        let (approve, id) = if let Some(id) = data.strip_prefix("a:") {
+            (true, id)
+        } else if let Some(id) = data.strip_prefix("d:") {
+            (false, id)
+        } else {
+            return Err(GatewayError::Other(format!(
+                "unknown callback data: {data}"
+            )));
+        };
+        if ApprovalId::from_str(id).is_err() {
+            return Err(GatewayError::Other(format!("invalid approval id: {id}")));
+        }
+        Ok(ApprovalDecision {
+            chat_id,
+            approval_id: id.to_string(),
+            approve,
+            callback_query_id,
+        })
+    }
+
+    /// Inline keyboard JSON for Telegram `reply_markup` (Approve / Deny).
+    #[must_use]
+    pub fn approval_reply_markup(approval_id: &str) -> Value {
+        serde_json::json!({
+            "inline_keyboard": [[
+                { "text": "Approve", "callback_data": format!("a:{approval_id}") },
+                { "text": "Deny", "callback_data": format!("d:{approval_id}") }
+            ]]
         })
     }
 }
@@ -204,6 +457,7 @@ pub mod discord {
 #[derive(Debug, Default)]
 pub struct RecordingTransport {
     pub sent: std::sync::Mutex<Vec<OutboundMessage>>,
+    pub callbacks: std::sync::Mutex<Vec<(String, String)>>,
 }
 
 #[async_trait]
@@ -214,33 +468,65 @@ impl PlatformTransport for RecordingTransport {
         }
         Ok(())
     }
+
+    async fn answer_callback(
+        &self,
+        callback_query_id: &str,
+        text: &str,
+    ) -> Result<(), GatewayError> {
+        if let Ok(mut c) = self.callbacks.lock() {
+            c.push((callback_query_id.to_string(), text.to_string()));
+        }
+        Ok(())
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use keryx_app::ControlPlane;
-    use keryx_domain::PrincipalId;
+    use keryx_app::{ControlPlane, SessionStore};
+    use keryx_domain::{PrincipalId, RunId};
     use keryx_model::FakeModelProvider;
     use keryx_storage::InMemorySessionStore;
     use serde_json::json;
     use std::sync::Arc;
 
-    #[tokio::test]
-    async fn telegram_inbound_maps_to_gateway_origin() {
+    fn operator() -> Principal {
+        Principal {
+            id: PrincipalId::new("operator"),
+        }
+    }
+
+    fn harness() -> (
+        Arc<InMemorySessionStore>,
+        Arc<ControlPlane<InMemorySessionStore, FakeModelProvider>>,
+        Arc<RecordingTransport>,
+        GatewayRuntime<ControlPlane<InMemorySessionStore, FakeModelProvider>, RecordingTransport>,
+    ) {
         let store = Arc::new(InMemorySessionStore::new());
         let model = Arc::new(FakeModelProvider::with_fixed_content("tg reply"));
-        let control = Arc::new(ControlPlane::new(store, model));
+        let control = Arc::new(ControlPlane::new(store.clone(), model));
         let transport = Arc::new(RecordingTransport::default());
         let gw = GatewayRuntime::new(
-            control,
+            control.clone(),
             transport.clone(),
-            Principal {
-                id: PrincipalId::new("operator"),
-            },
+            operator(),
             "secret-bot-token",
         )
         .unwrap();
+        (store, control, transport, gw)
+    }
+
+    async fn seed_pending(store: &InMemorySessionStore, action: &str, summary: &str) -> Approval {
+        let approval =
+            Approval::pending(RunId::new(), PrincipalId::new("operator"), action, summary);
+        store.create_approval(approval.clone()).await.unwrap();
+        approval
+    }
+
+    #[tokio::test]
+    async fn telegram_inbound_maps_to_gateway_origin() {
+        let (_store, _control, transport, gw) = harness();
 
         let update = json!({
             "message": {
@@ -296,19 +582,22 @@ mod tests {
 
     #[tokio::test]
     async fn discord_inbound_maps_origin() {
-        let store = Arc::new(InMemorySessionStore::new());
-        let model = Arc::new(FakeModelProvider::with_fixed_content("discord ok"));
-        let control = Arc::new(ControlPlane::new(store, model));
-        let transport = Arc::new(RecordingTransport::default());
-        let gw = GatewayRuntime::new(
-            control,
-            transport,
-            Principal {
-                id: PrincipalId::new("op"),
-            },
-            "discord-token",
-        )
-        .unwrap();
+        let (_store, _control, _transport, gw) = {
+            let store = Arc::new(InMemorySessionStore::new());
+            let model = Arc::new(FakeModelProvider::with_fixed_content("discord ok"));
+            let control = Arc::new(ControlPlane::new(store.clone(), model));
+            let transport = Arc::new(RecordingTransport::default());
+            let gw = GatewayRuntime::new(
+                control.clone(),
+                transport.clone(),
+                Principal {
+                    id: PrincipalId::new("op"),
+                },
+                "discord-token",
+            )
+            .unwrap();
+            (store, control, transport, gw)
+        };
         let event = json!({
             "t": "MESSAGE_CREATE",
             "d": {
@@ -320,5 +609,185 @@ mod tests {
         let inbound = discord::parse_message_create(&event).unwrap();
         let run = gw.handle_inbound(inbound, "discord-token").await.unwrap();
         assert_eq!(run.origin.as_str(), "gateway:discord");
+    }
+
+    #[tokio::test]
+    async fn notify_pending_sends_approve_deny_to_allowlisted_chats() {
+        let (store, _control, transport, gw) = harness();
+        let a = seed_pending(&store, "write_file", "path=SOUL.md").await;
+
+        let n = gw
+            .notify_pending_approvals(&["42".into(), "99".into()])
+            .await
+            .unwrap();
+        assert_eq!(n, 2);
+
+        let sent = transport.sent.lock().unwrap();
+        assert_eq!(sent.len(), 2);
+        for msg in sent.iter() {
+            assert_eq!(msg.approval_id.as_deref(), Some(a.id.to_string().as_str()));
+            assert!(msg.text.contains("Needs you"));
+            assert!(msg.text.contains("write_file"));
+            assert!(msg.text.contains(&a.id.to_string()));
+        }
+        // Second poll does not re-notify the same Approval.
+        drop(sent);
+        let n2 = gw.notify_pending_approvals(&["42".into()]).await.unwrap();
+        assert_eq!(n2, 0);
+    }
+
+    #[tokio::test]
+    async fn operator_wide_queue_not_only_chat_mapped_sessions() {
+        let (store, _control, transport, gw) = harness();
+        // Pending Approvals with no Session/chat mapping still surface.
+        let a1 = seed_pending(&store, "shell_exec", "rm -rf").await;
+        let a2 = seed_pending(&store, "skill_manage", "create skill").await;
+
+        let n = gw.notify_pending_approvals(&["42".into()]).await.unwrap();
+        assert_eq!(n, 2);
+        let sent = transport.sent.lock().unwrap();
+        let ids: HashSet<_> = sent.iter().filter_map(|m| m.approval_id.clone()).collect();
+        assert!(ids.contains(&a1.id.to_string()));
+        assert!(ids.contains(&a2.id.to_string()));
+    }
+
+    #[tokio::test]
+    async fn approve_via_callback_records_operator_principal() {
+        let (store, control, transport, gw) = harness();
+        let a = seed_pending(&store, "write_file", "path=x").await;
+        let allow = ChatAllowlist::from_ids(["42"]);
+
+        let update = json!({
+            "callback_query": {
+                "id": "cq-1",
+                "data": format!("a:{}", a.id),
+                "message": { "chat": { "id": 42 } }
+            }
+        });
+        let decision = telegram::parse_callback_query(&update).unwrap();
+        let resolved = gw
+            .handle_approval_decision(decision, &allow, "secret-bot-token")
+            .await
+            .unwrap();
+
+        assert_eq!(resolved.status, ApprovalStatus::Approved);
+        assert_eq!(
+            resolved.decided_by.as_ref().map(|p| p.to_string()),
+            Some("operator".into())
+        );
+        // Control plane is system of record — re-read via service.
+        let listed = control.get_approval(a.id).await.unwrap();
+        assert_eq!(listed.status, ApprovalStatus::Approved);
+        assert_eq!(
+            listed.decided_by.as_ref().map(|p| p.to_string()),
+            Some("operator".into())
+        );
+        assert_eq!(transport.callbacks.lock().unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn deny_via_command_fails_closed() {
+        let (store, control, _transport, gw) = harness();
+        let a = seed_pending(&store, "write_file", "path=x").await;
+        let allow = ChatAllowlist::from_ids(["42"]);
+
+        let inbound = InboundMessage {
+            platform: "telegram".into(),
+            chat_id: "42".into(),
+            text: format!("/deny {}", a.id),
+            external_user: "7".into(),
+        };
+        let decision = telegram::parse_decision_command(&inbound).unwrap();
+        let resolved = gw
+            .handle_approval_decision(decision, &allow, "secret-bot-token")
+            .await
+            .unwrap();
+        assert_eq!(resolved.status, ApprovalStatus::Denied);
+        assert_eq!(
+            control.get_approval(a.id).await.unwrap().status,
+            ApprovalStatus::Denied
+        );
+    }
+
+    #[tokio::test]
+    async fn non_allowlisted_decide_fail_closed() {
+        let (store, control, transport, gw) = harness();
+        let a = seed_pending(&store, "write_file", "path=x").await;
+        let allow = ChatAllowlist::from_ids(["42"]);
+
+        let decision = ApprovalDecision {
+            chat_id: "evil".into(),
+            approval_id: a.id.to_string(),
+            approve: true,
+            callback_query_id: None,
+        };
+        let err = gw
+            .handle_approval_decision(decision, &allow, "secret-bot-token")
+            .await
+            .unwrap_err();
+        assert!(matches!(err, GatewayError::ChatNotAllowlisted));
+        // Still pending — control plane unchanged.
+        assert_eq!(
+            control.get_approval(a.id).await.unwrap().status,
+            ApprovalStatus::Pending
+        );
+        assert!(transport.sent.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn approve_does_not_change_gateway_run_origin() {
+        // Approve resolves the Approval only; Run origin stays reduced-trust gateway.
+        let (store, control, _transport, gw) = harness();
+        let run = gw
+            .handle_inbound(
+                InboundMessage {
+                    platform: "telegram".into(),
+                    chat_id: "42".into(),
+                    text: "goal".into(),
+                    external_user: "7".into(),
+                },
+                "secret-bot-token",
+            )
+            .await
+            .unwrap();
+        assert!(run.origin.is_reduced_trust());
+
+        let approval =
+            Approval::pending(run.id, PrincipalId::new("operator"), "write_file", "path=x");
+        store.create_approval(approval.clone()).await.unwrap();
+        let allow = ChatAllowlist::from_ids(["42"]);
+        let decision = ApprovalDecision {
+            chat_id: "42".into(),
+            approval_id: approval.id.to_string(),
+            approve: true,
+            callback_query_id: None,
+        };
+        gw.handle_approval_decision(decision, &allow, "secret-bot-token")
+            .await
+            .unwrap();
+
+        let after = control.get_run(run.id).await.unwrap();
+        assert_eq!(after.origin.as_str(), "gateway:telegram");
+        assert!(after.origin.is_reduced_trust());
+    }
+
+    #[tokio::test]
+    async fn callback_data_and_markup_round_trip() {
+        let id = ApprovalId::new();
+        let markup = telegram::approval_reply_markup(&id.to_string());
+        let row = &markup["inline_keyboard"][0];
+        assert_eq!(row[0]["callback_data"], format!("a:{id}"));
+        assert_eq!(row[1]["callback_data"], format!("d:{id}"));
+
+        let update = json!({
+            "callback_query": {
+                "id": "cq",
+                "data": format!("d:{id}"),
+                "message": { "chat": { "id": 1 } }
+            }
+        });
+        let d = telegram::parse_callback_query(&update).unwrap();
+        assert!(!d.approve);
+        assert_eq!(d.approval_id, id.to_string());
     }
 }

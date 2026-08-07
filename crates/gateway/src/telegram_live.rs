@@ -1,6 +1,10 @@
 //! Live Telegram Bot API transport + long-poll loop (not used in default CI).
+//!
+//! Approvals: operator-wide pending queue notify + in-chat Approve/Deny (#77 / #68).
 
-use crate::{telegram, GatewayError, InboundMessage, OutboundMessage, PlatformTransport};
+use crate::{
+    telegram, ApprovalDecision, GatewayError, InboundMessage, OutboundMessage, PlatformTransport,
+};
 use async_trait::async_trait;
 use keryx_app::ControlPlaneService;
 use keryx_domain::{Principal, RunStatus, SessionId};
@@ -58,7 +62,7 @@ impl TelegramBotApi {
         Ok(body["result"].clone())
     }
 
-    /// Long-poll `getUpdates`.
+    /// Long-poll `getUpdates` (messages + callback queries for Approvals).
     pub async fn get_updates(
         &self,
         offset: i64,
@@ -70,7 +74,10 @@ impl TelegramBotApi {
             .query(&[
                 ("offset", offset.to_string()),
                 ("timeout", timeout_secs.to_string()),
-                ("allowed_updates", r#"["message"]"#.to_string()),
+                (
+                    "allowed_updates",
+                    r#"["message","callback_query"]"#.to_string(),
+                ),
             ])
             .send()
             .await
@@ -101,13 +108,17 @@ impl PlatformTransport for TelegramBotApi {
         } else {
             msg.text
         };
+        let mut body = serde_json::json!({
+            "chat_id": msg.chat_id,
+            "text": text,
+        });
+        if let Some(approval_id) = msg.approval_id.as_deref() {
+            body["reply_markup"] = telegram::approval_reply_markup(approval_id);
+        }
         let resp = self
             .client
             .post(self.method_url("sendMessage"))
-            .json(&serde_json::json!({
-                "chat_id": msg.chat_id,
-                "text": text,
-            }))
+            .json(&body)
             .send()
             .await
             .map_err(|e| GatewayError::Other(format!("sendMessage: {e}")))?;
@@ -117,6 +128,33 @@ impl PlatformTransport for TelegramBotApi {
             .map_err(|e| GatewayError::Other(format!("sendMessage json: {e}")))?;
         if body.get("ok").and_then(Value::as_bool) != Some(true) {
             return Err(GatewayError::Other(format!("sendMessage failed: {body}")));
+        }
+        Ok(())
+    }
+
+    async fn answer_callback(
+        &self,
+        callback_query_id: &str,
+        text: &str,
+    ) -> Result<(), GatewayError> {
+        let resp = self
+            .client
+            .post(self.method_url("answerCallbackQuery"))
+            .json(&serde_json::json!({
+                "callback_query_id": callback_query_id,
+                "text": text,
+            }))
+            .send()
+            .await
+            .map_err(|e| GatewayError::Other(format!("answerCallbackQuery: {e}")))?;
+        let body: Value = resp
+            .json()
+            .await
+            .map_err(|e| GatewayError::Other(format!("answerCallbackQuery json: {e}")))?;
+        if body.get("ok").and_then(Value::as_bool) != Some(true) {
+            return Err(GatewayError::Other(format!(
+                "answerCallbackQuery failed: {body}"
+            )));
         }
         Ok(())
     }
@@ -130,14 +168,19 @@ pub struct ChatAllowlist {
 
 impl ChatAllowlist {
     pub fn from_env_csv(raw: Option<String>) -> Self {
-        let ids = raw
-            .unwrap_or_default()
-            .split(',')
-            .map(str::trim)
-            .filter(|s| !s.is_empty())
-            .map(str::to_string)
-            .collect();
-        Self { ids }
+        Self::from_ids(
+            raw.unwrap_or_default()
+                .split(',')
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(str::to_string),
+        )
+    }
+
+    pub fn from_ids(ids: impl IntoIterator<Item = impl Into<String>>) -> Self {
+        Self {
+            ids: ids.into_iter().map(Into::into).collect(),
+        }
     }
 
     pub fn allows(&self, chat_id: &str) -> bool {
@@ -147,12 +190,25 @@ impl ChatAllowlist {
     pub fn is_open(&self) -> bool {
         self.ids.is_empty()
     }
+
+    /// Fixed notify targets when allowlist is non-empty.
+    #[must_use]
+    pub fn fixed_targets(&self) -> Option<Vec<String>> {
+        if self.ids.is_empty() {
+            None
+        } else {
+            Some(self.ids.iter().cloned().collect())
+        }
+    }
 }
 
 /// Durable-enough chat → Session mapping for the process lifetime.
+///
+/// Also tracks chats that messaged the bot (open-allowlist Approval notify targets).
 #[derive(Debug, Default)]
 pub struct ChatSessionMap {
     inner: Mutex<HashMap<String, SessionId>>,
+    seen_chats: Mutex<HashSet<String>>,
 }
 
 impl ChatSessionMap {
@@ -165,6 +221,7 @@ impl ChatSessionMap {
         F: FnOnce() -> Fut,
         Fut: std::future::Future<Output = Result<SessionId, GatewayError>>,
     {
+        self.remember_chat(chat_id).await;
         {
             let guard = self.inner.lock().await;
             if let Some(id) = guard.get(chat_id) {
@@ -176,6 +233,108 @@ impl ChatSessionMap {
         // Another task may have raced; prefer existing.
         Ok(*guard.entry(chat_id.to_string()).or_insert(id))
     }
+
+    /// Chats that have interacted (for open allowlist Approval fan-out).
+    pub async fn known_chats(&self) -> Vec<String> {
+        self.seen_chats.lock().await.iter().cloned().collect()
+    }
+
+    pub async fn remember_chat(&self, chat_id: &str) {
+        self.seen_chats.lock().await.insert(chat_id.to_string());
+    }
+}
+
+/// Process-lifetime set of Approvals already notified to Telegram.
+#[derive(Debug, Default)]
+struct NotifiedApprovals {
+    inner: Mutex<HashSet<String>>,
+}
+
+impl NotifiedApprovals {
+    async fn try_mark(&self, id: &str) -> bool {
+        self.inner.lock().await.insert(id.to_string())
+    }
+}
+
+/// Notify allowlisted chats about operator-wide pending Approvals (control plane is SoR).
+async fn notify_pending_approvals_live<C: ControlPlaneService>(
+    control: &C,
+    transport: &TelegramBotApi,
+    targets: &[String],
+    notified: &NotifiedApprovals,
+) -> Result<usize, GatewayError> {
+    if targets.is_empty() {
+        return Ok(0);
+    }
+    let pending = control.list_approvals(true).await?;
+    let mut sent = 0usize;
+    for approval in pending {
+        let id = approval.id.to_string();
+        if !notified.try_mark(&id).await {
+            continue;
+        }
+        let text = crate::format_approval_notice(&approval);
+        for chat_id in targets {
+            transport
+                .send(OutboundMessage::approval_notice(
+                    chat_id.clone(),
+                    text.clone(),
+                    id.clone(),
+                ))
+                .await?;
+            sent += 1;
+        }
+    }
+    Ok(sent)
+}
+
+/// Resolve in-chat Approve/Deny through the control plane as `principal`.
+async fn handle_approval_decision_live<C: ControlPlaneService>(
+    control: &C,
+    transport: &TelegramBotApi,
+    principal: &Principal,
+    allowlist: &ChatAllowlist,
+    decision: ApprovalDecision,
+) -> Result<(), GatewayError> {
+    if !allowlist.allows(&decision.chat_id) {
+        warn!(
+            chat_id = %decision.chat_id,
+            "telegram approval decide from non-allowlisted chat; ignored"
+        );
+        return Err(GatewayError::ChatNotAllowlisted);
+    }
+    let approval_id = decision
+        .approval_id
+        .parse()
+        .map_err(|e| GatewayError::Other(format!("invalid approval id: {e}")))?;
+
+    let approval = if decision.approve {
+        control.approve(principal.clone(), approval_id).await?
+    } else {
+        control.deny(principal.clone(), approval_id).await?
+    };
+
+    if let Some(cb) = decision.callback_query_id.as_deref() {
+        let ack = if decision.approve {
+            "Approved"
+        } else {
+            "Denied"
+        };
+        let _ = transport.answer_callback(cb, ack).await;
+    }
+
+    let status = if decision.approve {
+        "approved"
+    } else {
+        "denied"
+    };
+    transport
+        .send(OutboundMessage::text(
+            decision.chat_id,
+            format!("Approval {status}: {} ({})", approval.action, approval.id),
+        ))
+        .await?;
+    Ok(())
 }
 
 /// Process one inbound Telegram message through control plane and reply with Run result.
@@ -195,10 +354,7 @@ pub async fn handle_message_e2e<C: ControlPlaneService + 'static>(
 
     // Typing / ack
     let _ = transport
-        .send(OutboundMessage {
-            chat_id: chat_id.clone(),
-            text: "… working".into(),
-        })
+        .send(OutboundMessage::text(chat_id.clone(), "… working"))
         .await;
 
     let session_id = sessions
@@ -234,10 +390,10 @@ pub async fn handle_message_e2e<C: ControlPlaneService + 'static>(
         if tokio::time::Instant::now() > deadline {
             let _ = control.cancel_run(run.id).await;
             let _ = transport
-                .send(OutboundMessage {
-                    chat_id: chat_id.clone(),
-                    text: "timed out waiting for the agent Run".into(),
-                })
+                .send(OutboundMessage::text(
+                    chat_id.clone(),
+                    "timed out waiting for the agent Run",
+                ))
                 .await;
             return Err(GatewayError::Other("run wait timeout".into()));
         }
@@ -258,15 +414,15 @@ pub async fn handle_message_e2e<C: ControlPlaneService + 'static>(
     };
 
     transport
-        .send(OutboundMessage {
-            chat_id,
-            text: reply,
-        })
+        .send(OutboundMessage::text(chat_id, reply))
         .await?;
     Ok(())
 }
 
 /// Background long-poll loop. Spawns per-message tasks so one slow Run does not block polling.
+///
+/// Also polls the control-plane pending Approval queue and notifies allowlisted chats with
+/// in-chat Approve/Deny. Decisions go through the control plane as the operator Principal.
 pub async fn run_telegram_long_poll<C: ControlPlaneService + 'static>(
     control: Arc<C>,
     token: String,
@@ -295,9 +451,21 @@ pub async fn run_telegram_long_poll<C: ControlPlaneService + 'static>(
         .await;
 
     let sessions = Arc::new(ChatSessionMap::default());
+    let notified = Arc::new(NotifiedApprovals::default());
     let mut offset: i64 = 0;
 
     loop {
+        // Operator-wide Approvals surface (not chat-mapped only).
+        let targets = match allowlist.fixed_targets() {
+            Some(t) => t,
+            None => sessions.known_chats().await,
+        };
+        if let Err(e) =
+            notify_pending_approvals_live(control.as_ref(), api.as_ref(), &targets, &notified).await
+        {
+            warn!(error = %e, "telegram approval notify failed");
+        }
+
         let updates = match api.get_updates(offset, 25).await {
             Ok(u) => u,
             Err(e) => {
@@ -311,6 +479,35 @@ pub async fn run_telegram_long_poll<C: ControlPlaneService + 'static>(
             let update_id = update.get("update_id").and_then(Value::as_i64).unwrap_or(0);
             offset = offset.max(update_id + 1);
 
+            // In-chat Approve/Deny (callback_query).
+            if let Ok(decision) = telegram::parse_callback_query(&update) {
+                if !allowlist.allows(&decision.chat_id) {
+                    warn!(
+                        chat_id = %decision.chat_id,
+                        "telegram approval callback not allowlisted; ignored"
+                    );
+                    continue;
+                }
+                let control = Arc::clone(&control);
+                let api = Arc::clone(&api);
+                let principal = principal.clone();
+                let allowlist = allowlist.clone();
+                tokio::spawn(async move {
+                    if let Err(e) = handle_approval_decision_live(
+                        control.as_ref(),
+                        api.as_ref(),
+                        &principal,
+                        &allowlist,
+                        decision,
+                    )
+                    .await
+                    {
+                        warn!(error = %e, "telegram approval decide failed");
+                    }
+                });
+                continue;
+            }
+
             let inbound = match telegram::parse_update(&update) {
                 Ok(m) => m,
                 Err(_) => continue, // non-text / no message
@@ -321,13 +518,38 @@ pub async fn run_telegram_long_poll<C: ControlPlaneService + 'static>(
             if !allowlist.allows(&inbound.chat_id) {
                 warn!(chat_id = %inbound.chat_id, "telegram chat not allowlisted; ignored");
                 let _ = api
-                    .send(OutboundMessage {
-                        chat_id: inbound.chat_id.clone(),
-                        text: "this bot is private (chat not allowlisted)".into(),
-                    })
+                    .send(OutboundMessage::text(
+                        inbound.chat_id.clone(),
+                        "this bot is private (chat not allowlisted)",
+                    ))
                     .await;
                 continue;
             }
+
+            // Text /approve|/deny commands (same control-plane decide path).
+            if let Some(decision) = telegram::parse_decision_command(&inbound) {
+                let control = Arc::clone(&control);
+                let api = Arc::clone(&api);
+                let principal = principal.clone();
+                let allowlist = allowlist.clone();
+                tokio::spawn(async move {
+                    if let Err(e) = handle_approval_decision_live(
+                        control.as_ref(),
+                        api.as_ref(),
+                        &principal,
+                        &allowlist,
+                        decision,
+                    )
+                    .await
+                    {
+                        warn!(error = %e, "telegram approval command failed");
+                    }
+                });
+                continue;
+            }
+
+            // Remember chat for open-allowlist Approval fan-out.
+            sessions.remember_chat(&inbound.chat_id).await;
 
             let control = Arc::clone(&control);
             let api = Arc::clone(&api);
