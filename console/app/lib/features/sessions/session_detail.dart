@@ -150,6 +150,11 @@ class _SessionDetailPaneState extends ConsumerState<SessionDetailPane>
               // Prefer human activity lines; never fall back to raw event noise.
               activitySnippet: runState.lastActivitySnippet,
             ),
+          // Child Runs under parent root (read-only tree; not Session contacts).
+          if (runState.boundSessionId == null ||
+              runState.boundSessionId == session.id)
+            if (runState.childRunTree case final tree?)
+              ChildRunTreeStrip(tree: tree),
           Expanded(
             child: SessionConversationBody(
               onOpenArtifact: widget.onOpenArtifact,
@@ -228,6 +233,143 @@ class _StreamingStatusStrip extends StatelessWidget {
               ),
             ),
           ],
+        ),
+      ),
+    );
+  }
+}
+
+/// Read-only Child Run tree under the Active root (#83).
+///
+/// Projects control-plane linkage in the open Session. Child Runs are never
+/// listed as separate chat contacts.
+class ChildRunTreeStrip extends StatelessWidget {
+  const ChildRunTreeStrip({super.key, required this.tree});
+
+  final ChildRunTree tree;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final rootStopped = !tree.rootIsActive;
+    final border = theme.dividerTheme.color ?? theme.dividerColor;
+
+    return Material(
+      color: theme.colorScheme.surfaceContainerLow,
+      child: DecoratedBox(
+        decoration: BoxDecoration(
+          border: Border(
+            bottom: BorderSide(color: border),
+          ),
+        ),
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(16, 10, 16, 12),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Row(
+                children: [
+                  Icon(
+                    Icons.account_tree_outlined,
+                    size: 16,
+                    color: theme.colorScheme.onSurfaceVariant,
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      'Root Run · ${tree.rootStatus}',
+                      style: theme.textTheme.labelMedium?.copyWith(
+                        fontWeight: FontWeight.w700,
+                      ),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+                  if (rootStopped)
+                    Text(
+                      tree.rootStatus == 'cancelled'
+                          ? 'parent stop'
+                          : tree.rootStatus,
+                      style: theme.textTheme.labelSmall?.copyWith(
+                        color: theme.colorScheme.error,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                ],
+              ),
+              if (tree.rootGoal.isNotEmpty) ...[
+                const SizedBox(height: 2),
+                Padding(
+                  padding: const EdgeInsets.only(left: 24),
+                  child: Text(
+                    tree.rootGoal,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      color: theme.colorScheme.onSurfaceVariant,
+                    ),
+                  ),
+                ),
+              ],
+              const SizedBox(height: 8),
+              for (final child in tree.children) ...[
+                Padding(
+                  padding: const EdgeInsets.only(left: 12, top: 4),
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        '└ ',
+                        style: theme.textTheme.labelMedium?.copyWith(
+                          color: theme.colorScheme.onSurfaceVariant,
+                          fontFamily: 'monospace',
+                        ),
+                      ),
+                      Icon(
+                        Icons.subdirectory_arrow_right,
+                        size: 14,
+                        color: theme.colorScheme.onSurfaceVariant,
+                      ),
+                      const SizedBox(width: 4),
+                      Expanded(
+                        child: Text(
+                          child.goal.isEmpty
+                              ? 'Child Run'
+                              : child.goal,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: theme.textTheme.bodySmall,
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Text(
+                        child.status,
+                        style: theme.textTheme.labelSmall?.copyWith(
+                          color: child.isRunning
+                              ? theme.colorScheme.primary
+                              : (child.status == 'cancelled' ||
+                                      child.status == 'failed'
+                                  ? theme.colorScheme.error
+                                  : theme.colorScheme.onSurfaceVariant),
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+              if (rootStopped && tree.children.any((c) => c.status == 'cancelled'))
+                Padding(
+                  padding: const EdgeInsets.only(left: 24, top: 8),
+                  child: Text(
+                    'Cancel stops the root and Child Runs together.',
+                    style: theme.textTheme.labelSmall?.copyWith(
+                      color: theme.colorScheme.onSurfaceVariant,
+                    ),
+                  ),
+                ),
+            ],
+          ),
         ),
       ),
     );

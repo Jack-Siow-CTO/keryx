@@ -41,7 +41,11 @@ final class LiveActivityItem {
         if (title.startsWith('Skill')) return '$title · $status';
         return 'Tool · $title · $status';
       case LiveActivityKind.childRun:
-        return 'Child Run · $status';
+        final goalBit = summary.isNotEmpty && summary != title
+            ? summary
+            : (title.isNotEmpty && title != 'Child Run' ? title : '');
+        if (goalBit.isEmpty) return 'Child Run · $status';
+        return 'Child Run · $goalBit · $status';
       case LiveActivityKind.status:
         return summary.isNotEmpty ? summary : title;
     }
@@ -138,7 +142,7 @@ List<LiveActivityItem>? applyLiveActivity(
       LiveActivityItem(
         id: 'child:$childId',
         kind: LiveActivityKind.childRun,
-        title: 'Child Run',
+        title: goal.isEmpty ? 'Child Run' : goal,
         status: 'running',
         summary: goal.isEmpty ? 'Child Run started' : goal,
       ),
@@ -220,7 +224,7 @@ List<LiveActivityItem>? applyLiveActivity(
       label = 'Run completed';
       status = 'completed';
     }
-    return _upsert(
+    var next = _upsert(
       current,
       LiveActivityItem(
         id: 'status:run',
@@ -230,8 +234,112 @@ List<LiveActivityItem>? applyLiveActivity(
         summary: label,
       ),
     );
+    // Parent stop bounds the tree: running Child Runs stop with the root.
+    if (status == 'cancelled' || status == 'failed' || status == 'interrupted') {
+      next = markRunningChildrenStopped(next, status);
+    }
+    return next;
   }
   return null;
+}
+
+/// Mark still-running Child Run activity as stopped with the parent (cancel cascade).
+///
+/// Worker cancels the tree; Console projection must not leave children "running"
+/// after parent stop is known (SSE terminal or cancel REST response).
+List<LiveActivityItem> markRunningChildrenStopped(
+  List<LiveActivityItem> current,
+  String terminalStatus,
+) {
+  return [
+    for (final item in current)
+      if (item.kind == LiveActivityKind.childRun && item.status == 'running')
+        item.copyWith(status: terminalStatus)
+      else
+        item,
+  ];
+}
+
+/// One Child Run under a root (read-only projection; not a Session contact).
+final class ChildRunTreeNode {
+  const ChildRunTreeNode({
+    required this.childRunId,
+    required this.goal,
+    required this.status,
+  });
+
+  final String childRunId;
+  final String goal;
+  final String status;
+
+  bool get isRunning => status == 'running';
+  bool get isStopped =>
+      status == 'cancelled' ||
+      status == 'failed' ||
+      status == 'interrupted' ||
+      status == 'completed';
+}
+
+/// Root Run with nested Child Runs for open-Session projection (#83).
+///
+/// Built only from control-plane linkage (GET Run parent_run_id on the child
+/// side + parent SSE child_run.*). Never invents separate Session contacts.
+final class ChildRunTree {
+  const ChildRunTree({
+    required this.rootRunId,
+    required this.rootGoal,
+    required this.rootStatus,
+    required this.children,
+  });
+
+  final String rootRunId;
+  final String rootGoal;
+  final String rootStatus;
+  final List<ChildRunTreeNode> children;
+
+  bool get hasChildren => children.isNotEmpty;
+
+  bool get rootIsActive => rootStatus == 'active';
+
+  bool get anyChildRunning => children.any((c) => c.isRunning);
+}
+
+/// Project Child Run tree under the Active **root** Run.
+///
+/// Returns null when there is no root, the Run is itself a Child
+/// ([RunRecord.parentRunId] set), or no Child activity is known yet.
+ChildRunTree? projectChildRunTree({
+  required RunRecord? activeRun,
+  required List<LiveActivityItem> liveActivity,
+}) {
+  if (activeRun == null) return null;
+  // Child Runs must never project as the Session root contact.
+  if (activeRun.parentRunId != null) return null;
+
+  final children = <ChildRunTreeNode>[];
+  for (final item in liveActivity) {
+    if (item.kind != LiveActivityKind.childRun) continue;
+    final id = item.id.startsWith('child:')
+        ? item.id.substring('child:'.length)
+        : item.id;
+    children.add(
+      ChildRunTreeNode(
+        childRunId: id,
+        goal: item.summary.isNotEmpty
+            ? item.summary
+            : (item.title.isNotEmpty ? item.title : 'Child Run'),
+        status: item.status,
+      ),
+    );
+  }
+  if (children.isEmpty) return null;
+
+  return ChildRunTree(
+    rootRunId: activeRun.id,
+    rootGoal: activeRun.goal,
+    rootStatus: activeRun.status,
+    children: children,
+  );
 }
 
 LiveActivityItem? _find(List<LiveActivityItem> items, String id) {
@@ -296,6 +404,12 @@ final class SessionRunState {
   /// Last human activity line for the status strip (never raw event noise).
   String? get lastActivitySnippet =>
       liveActivity.isEmpty ? null : liveActivity.last.stripLabel;
+
+  /// Child Runs nested under the Active root (null when none). Not contacts.
+  ChildRunTree? get childRunTree => projectChildRunTree(
+        activeRun: activeRun,
+        liveActivity: liveActivity,
+      );
 
   SessionRunState copyWith({
     String? boundSessionId,
@@ -565,7 +679,16 @@ class SessionRunController extends StateNotifier<SessionRunState> {
       await _sub?.cancel();
       _sub = null;
       if (state.boundSessionId != sessionId) return;
-      state = state.copyWith(activeRun: cancelled, busy: false);
+      // Parent cancel bounds the tree — project Child Runs stopped immediately.
+      final live = markRunningChildrenStopped(
+        state.liveActivity,
+        cancelled.status == 'cancelled' ? 'cancelled' : cancelled.status,
+      );
+      state = state.copyWith(
+        activeRun: cancelled,
+        busy: false,
+        liveActivity: live,
+      );
       await _ref.read(sessionsControllerProvider.notifier).refresh();
     } on KeryxApiException catch (e) {
       if (state.boundSessionId != sessionId) return;

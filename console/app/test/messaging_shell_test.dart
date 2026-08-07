@@ -182,6 +182,68 @@ void main() {
       expect(find.text('Cancel & re-run'), findsOneWidget);
     });
 
+    testWidgets('Session detail shows Child Run tree and Cancel on Active',
+        (tester) async {
+      // Active Run animates a progress strip — use pump, not pumpAndSettle.
+      tester.view.physicalSize = const Size(1200, 900);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+
+      final session = _session(
+        active: const ActiveRootRunSummary(
+          id: 'r1',
+          goal: 'parent goal',
+          origin: 'control_plane',
+          status: 'active',
+        ),
+      );
+      final live = [
+        const LiveActivityItem(
+          id: 'child:c1',
+          kind: LiveActivityKind.childRun,
+          title: 'scan workspace',
+          status: 'running',
+          summary: 'scan workspace',
+        ),
+      ];
+      final activeState = SessionRunState(
+        boundSessionId: session.id,
+        activeRun: RunRecord(
+          id: 'r1',
+          sessionId: session.id,
+          principalId: 'p1',
+          goal: 'parent goal',
+          status: 'active',
+          origin: 'control_plane',
+        ),
+        liveActivity: live,
+      );
+
+      await tester.pumpWidget(
+        _wrap(
+          const SessionDetailPane(),
+          [
+            sessionsControllerProvider.overrideWith(
+              (ref) => FakeSessionsController(
+                ref,
+                SessionsState(sessions: [session], selectedId: session.id),
+              ),
+            ),
+            sessionRunControllerProvider.overrideWith(
+              (ref) => FakeSessionRunController(ref, activeState),
+            ),
+          ],
+        ),
+      );
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 50));
+
+      expect(find.textContaining('Root Run · active'), findsOneWidget);
+      expect(find.text('scan workspace'), findsWidgets);
+      expect(find.text('Cancel Run'), findsOneWidget);
+    });
+
     testWidgets('projection Active hides Send without waiting for hydrate',
         (tester) async {
       final session = _session(

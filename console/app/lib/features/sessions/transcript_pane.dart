@@ -504,7 +504,8 @@ class ActivityBlock extends StatelessWidget {
                     Padding(
                       padding: const EdgeInsets.only(left: 45),
                       child: Text(
-                        'Child Run (read-only linkage — not a separate chat)',
+                        'Child Run under parent root (read-only linkage — '
+                        'not a separate Session contact)',
                         style: theme.textTheme.labelSmall?.copyWith(
                           color: theme.colorScheme.onSurfaceVariant,
                         ),

@@ -201,7 +201,11 @@ void main() {
       );
 
       expect(
-        find.textContaining('Child Run (read-only linkage'),
+        find.textContaining('Child Run under parent root'),
+        findsOneWidget,
+      );
+      expect(
+        find.textContaining('not a separate Session contact'),
         findsOneWidget,
       );
     });
