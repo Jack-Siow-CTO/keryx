@@ -103,6 +103,19 @@ impl FakeModelProvider {
         }
     }
 
+    /// Scripted responses with a wall-clock delay before each `complete` (cancel / hang tests).
+    #[must_use]
+    pub fn with_delay_and_script(delay: Duration, responses: Vec<ModelResponse>) -> Self {
+        Self {
+            fixed_content: None,
+            deltas: None,
+            tool_calls: None,
+            delay: Some(delay),
+            script: Mutex::new(responses),
+            last_tools: Self::empty_last_tools(),
+        }
+    }
+
     /// Tool names from the most recent `complete` request catalog (canonical internal names).
     #[must_use]
     pub fn last_tool_names(&self) -> Vec<String> {

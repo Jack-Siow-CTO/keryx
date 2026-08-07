@@ -6,7 +6,10 @@ use crate::limits::{RunBudgets, RunLimits};
 use crate::model::{ModelProvider, ModelRequest};
 use crate::registry::ActiveRunRegistry;
 use crate::store::SessionStore;
-use crate::tools::{catalog_for_policy, summarize_tool_args, DenyAllTools, ToolError, ToolRuntime};
+use crate::tools::{
+    catalog_for_policy, summarize_tool_args, DenyAllTools, ToolError, ToolResult, ToolRuntime,
+    ToolSpec,
+};
 use async_trait::async_trait;
 use keryx_domain::{
     ActiveRootRunSummary, Approval, ApprovalId, ApprovalStatus, ArtifactId, ArtifactMeta,
@@ -15,7 +18,9 @@ use keryx_domain::{
     SessionSummary, TranscriptMessage,
 };
 use std::collections::{BTreeSet, HashSet};
+use std::future::Future;
 use std::path::PathBuf;
+use std::pin::Pin;
 use std::sync::Arc;
 use tokio::sync::{broadcast, Mutex};
 use tokio::time::timeout;
@@ -900,123 +905,27 @@ where
         parent_run_id: RunId,
         goal: String,
         max_tool_calls: Option<u64>,
-    ) -> Result<Run, AppError> {
-        if goal.trim().is_empty() {
-            return Err(AppError::Store("child goal must not be empty".into()));
-        }
-        let parent = self.get_run(parent_run_id).await?;
-        if parent.status != RunStatus::Active {
-            return Err(AppError::RunNotActive);
-        }
-        if !parent.is_root() {
-            // Vertical slice: only root may spawn (avoids deep trees for now).
-            return Err(AppError::Store(
-                "only root Runs may spawn Child Runs in this version".into(),
-            ));
-        }
-
-        // Freeze parent Policy snapshot at spawn so later Worker config changes cannot
-        // expand child authority mid-process. Children inherit exact parent allowlist;
-        // if spawn API later accepts a tighter tool set, intersect via subset_of(parent).
-        let parent_policy = policy_for_run(&parent.origin, &self.control_plane_extra_tools);
-        let child_policy = parent_policy.clone();
-        // Budgets carved from / capped by parent defaults.
-        let child_budgets = self.limits.default_budgets.carve_for_child(max_tool_calls);
-
-        let child = Run::start_child(
-            parent.session_id,
-            parent.principal_id.clone(),
-            parent.id,
-            goal.clone(),
-            parent.origin.clone(),
-        );
-        self.store
-            .create_run(child.clone())
-            .await
-            .map_err(AppError::Store)?;
-
-        let cancel = {
-            let mut active = self.active.lock().await;
-            active.register_child(parent.id, child.id)
-        };
-
-        let _ = self.events.publish(
-            parent.id,
-            RunEventKind::ChildRunStarted {
-                child_run_id: child.id.to_string(),
-                goal: goal.clone(),
-            },
-        );
-
-        let store = Arc::clone(&self.store);
-        let model = Arc::clone(&self.model);
-        let tools = Arc::clone(&self.tools);
-        let events = Arc::clone(&self.events);
-        let active = Arc::clone(&self.active);
-        let approvals = Arc::clone(&self.approvals);
-        let control_plane_extra_tools = self.control_plane_extra_tools.clone();
-        let high_blast_tools = self.high_blast_tools.clone();
-        let skill_auto_commit = self.skill_auto_commit;
-        // Child: isolated transcript slice — no Soul re-attach (parent already has identity).
-        let run_context = RunContextConfig::default();
-        let child_id = child.id;
-        let session_id = child.session_id;
-        let principal_id = child.principal_id.clone();
-        let origin = child.origin.clone();
-        let parent_id = parent.id;
-
-        tokio::spawn(async move {
-            let result = execute_agent_loop(
-                store.clone(),
-                model,
-                tools,
-                events.clone(),
-                active.clone(),
-                approvals,
-                child_id,
-                session_id,
-                principal_id,
-                goal,
-                origin,
-                None,
-                None,
-                child_budgets,
-                run_context,
-                control_plane_extra_tools,
-                high_blast_tools,
-                skill_auto_commit,
-                Some(child_policy),
-                cancel,
-            )
-            .await;
-
-            // Mark child clear in registry; notify parent.
-            let status = store
-                .get_run(child_id)
-                .await
-                .ok()
-                .flatten()
-                .map(|r| match r.status {
-                    RunStatus::Active => "active",
-                    RunStatus::Completed => "completed",
-                    RunStatus::Failed => "failed",
-                    RunStatus::Cancelled => "cancelled",
-                    RunStatus::Interrupted => "interrupted",
-                })
-                .unwrap_or("unknown")
-                .to_string();
-            let _ = events.publish(
-                parent_id,
-                RunEventKind::ChildRunFinished {
-                    child_run_id: child_id.to_string(),
-                    status,
-                },
-            );
-            active.lock().await.clear_child(child_id);
-            let _ = result;
-        });
-
-        Ok(child)
+    ) -> Result<Run, AppError>
+    where
+        S: 'static,
+        M: 'static,
+    {
+        spawn_child_run_shared(
+            Arc::clone(&self.store),
+            Arc::clone(&self.model),
+            Arc::clone(&self.tools),
+            Arc::clone(&self.events),
+            Arc::clone(&self.active),
+            Arc::clone(&self.approvals),
+            parent_run_id,
+            goal,
+            max_tool_calls,
+            &self.limits.default_budgets,
+            self.control_plane_extra_tools.clone(),
+            self.high_blast_tools.clone(),
+            self.skill_auto_commit,
+        )
+        .await
     }
 
     async fn decide_approval(
@@ -1054,6 +963,228 @@ where
             },
         );
         Ok(approval)
+    }
+}
+
+/// Tool catalog entry for agent-facing Child Run spawn (Policy-gated).
+fn spawn_child_run_tool_spec() -> ToolSpec {
+    ToolSpec::new(
+        "spawn_child_run",
+        "Spawn a Child Run under this root Run for delegated work. \
+         The child has its own budget and a frozen Policy subset of the parent. \
+         Only an Active root Run may spawn.",
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "goal": {
+                    "type": "string",
+                    "description": "Goal for the Child Run"
+                },
+                "max_tool_calls": {
+                    "type": "integer",
+                    "description": "Optional max tool calls for the child (capped by parent budget)"
+                }
+            },
+            "required": ["goal"],
+            "additionalProperties": false
+        }),
+    )
+}
+
+/// Spawn a Child Run under an Active parent (shared by control-plane + agent tool path).
+#[allow(clippy::too_many_arguments)] // spawn orchestration bundle
+async fn spawn_child_run_shared<S, M>(
+    store: Arc<S>,
+    model: Arc<M>,
+    tools: Arc<dyn ToolRuntime>,
+    events: Arc<RunEventHub>,
+    active: Arc<Mutex<ActiveRunRegistry>>,
+    approvals: Arc<ApprovalBroker>,
+    parent_run_id: RunId,
+    goal: String,
+    max_tool_calls: Option<u64>,
+    parent_budgets: &RunBudgets,
+    control_plane_extra_tools: BTreeSet<String>,
+    high_blast_tools: HashSet<String>,
+    skill_auto_commit: bool,
+) -> Result<Run, AppError>
+where
+    S: SessionStore + 'static,
+    M: ModelProvider + 'static,
+{
+    if goal.trim().is_empty() {
+        return Err(AppError::Store("child goal must not be empty".into()));
+    }
+    let parent = load_run(store.as_ref(), parent_run_id).await?;
+    if parent.status != RunStatus::Active {
+        return Err(AppError::RunNotActive);
+    }
+    if !parent.is_root() {
+        // Vertical slice: only root may spawn (avoids deep trees for now).
+        return Err(AppError::Store(
+            "only root Runs may spawn Child Runs in this version".into(),
+        ));
+    }
+
+    // Freeze parent Policy snapshot at spawn so later Worker config changes cannot
+    // expand child authority mid-process. Children inherit exact parent allowlist;
+    // if spawn API later accepts a tighter tool set, intersect via subset_of(parent).
+    let parent_policy = policy_for_run(&parent.origin, &control_plane_extra_tools);
+    let child_policy = parent_policy.clone();
+    // Budgets carved from / capped by parent.
+    let child_budgets = parent_budgets.carve_for_child(max_tool_calls);
+
+    let child = Run::start_child(
+        parent.session_id,
+        parent.principal_id.clone(),
+        parent.id,
+        goal.clone(),
+        parent.origin.clone(),
+    );
+    store
+        .create_run(child.clone())
+        .await
+        .map_err(AppError::Store)?;
+
+    let cancel = {
+        let mut guard = active.lock().await;
+        guard.register_child(parent.id, child.id)
+    };
+
+    let _ = events.publish(
+        parent.id,
+        RunEventKind::ChildRunStarted {
+            child_run_id: child.id.to_string(),
+            goal: goal.clone(),
+        },
+    );
+
+    // Child: isolated transcript slice — no Soul re-attach (parent already has identity).
+    let run_context = RunContextConfig::default();
+    let child_id = child.id;
+    let session_id = child.session_id;
+    let principal_id = child.principal_id.clone();
+    let origin = child.origin.clone();
+    let parent_id = parent.id;
+    let store_bg = Arc::clone(&store);
+    let events_bg = Arc::clone(&events);
+    let active_bg = Arc::clone(&active);
+
+    tokio::spawn(async move {
+        let result = execute_agent_loop(
+            store_bg.clone(),
+            model,
+            tools,
+            events_bg.clone(),
+            active_bg.clone(),
+            approvals,
+            child_id,
+            session_id,
+            principal_id,
+            goal,
+            origin,
+            None,
+            None,
+            child_budgets,
+            run_context,
+            control_plane_extra_tools,
+            high_blast_tools,
+            skill_auto_commit,
+            Some(child_policy),
+            cancel,
+        )
+        .await;
+
+        // Mark child clear in registry; notify parent.
+        let status = store_bg
+            .get_run(child_id)
+            .await
+            .ok()
+            .flatten()
+            .map(|r| match r.status {
+                RunStatus::Active => "active",
+                RunStatus::Completed => "completed",
+                RunStatus::Failed => "failed",
+                RunStatus::Cancelled => "cancelled",
+                RunStatus::Interrupted => "interrupted",
+            })
+            .unwrap_or("unknown")
+            .to_string();
+        let _ = events_bg.publish(
+            parent_id,
+            RunEventKind::ChildRunFinished {
+                child_run_id: child_id.to_string(),
+                status,
+            },
+        );
+        active_bg.lock().await.clear_child(child_id);
+        let _ = result;
+    });
+
+    Ok(child)
+}
+
+/// Agent-tool path: Policy-gated spawn under the current root Run.
+async fn invoke_spawn_child_run_tool<S, M>(
+    store: Arc<S>,
+    model: Arc<M>,
+    tools: Arc<dyn ToolRuntime>,
+    events: Arc<RunEventHub>,
+    active: Arc<Mutex<ActiveRunRegistry>>,
+    approvals: Arc<ApprovalBroker>,
+    parent_run_id: RunId,
+    arguments: &serde_json::Value,
+    parent_budgets: &RunBudgets,
+    control_plane_extra_tools: BTreeSet<String>,
+    high_blast_tools: HashSet<String>,
+    skill_auto_commit: bool,
+) -> Result<ToolResult, ToolError>
+where
+    S: SessionStore + 'static,
+    M: ModelProvider + 'static,
+{
+    let goal = arguments
+        .get("goal")
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| ToolError::Failed("spawn_child_run: goal is required".into()))?
+        .to_string();
+    let max_tool_calls = arguments
+        .get("max_tool_calls")
+        .and_then(serde_json::Value::as_u64);
+
+    match spawn_child_run_shared(
+        store,
+        model,
+        tools,
+        events,
+        active,
+        approvals,
+        parent_run_id,
+        goal.clone(),
+        max_tool_calls,
+        parent_budgets,
+        control_plane_extra_tools,
+        high_blast_tools,
+        skill_auto_commit,
+    )
+    .await
+    {
+        Ok(child) => Ok(ToolResult {
+            content: format!(
+                "spawned child_run_id={} parent_run_id={} goal={} status=active",
+                child.id, parent_run_id, child.goal
+            ),
+            summary: format!("spawned child_run_id={}", child.id),
+        }),
+        Err(AppError::RunNotActive) => Err(ToolError::Failed(
+            "spawn_child_run: parent Run is not Active".into(),
+        )),
+        Err(AppError::RunNotFound) => Err(ToolError::Failed(
+            "spawn_child_run: parent Run not found".into(),
+        )),
+        Err(e) => Err(ToolError::Failed(format!("spawn_child_run: {e}"))),
     }
 }
 
@@ -1096,8 +1227,11 @@ fn policy_for_run(origin: &RunOrigin, control_plane_extra: &BTreeSet<String>) ->
     }
 }
 
+/// Boxed agent loop so spawn ↔ tool-spawn recursion does not cycle opaque futures.
+type AgentLoopFuture = Pin<Box<dyn Future<Output = Result<(), AppError>> + Send>>;
+
 #[allow(clippy::too_many_arguments)] // agent loop orchestration bundle
-async fn execute_agent_loop<S, M>(
+fn execute_agent_loop<S, M>(
     store: Arc<S>,
     model: Arc<M>,
     tools: Arc<dyn ToolRuntime>,
@@ -1120,10 +1254,61 @@ async fn execute_agent_loop<S, M>(
     // from origin + live Worker extras so children cannot gain tools mid-process.
     policy_override: Option<Policy>,
     cancel: CancellationToken,
+) -> AgentLoopFuture
+where
+    S: SessionStore + 'static,
+    M: ModelProvider + 'static,
+{
+    Box::pin(execute_agent_loop_inner(
+        store,
+        model,
+        tools,
+        events,
+        active,
+        approvals,
+        run_id,
+        session_id,
+        principal_id,
+        goal,
+        origin,
+        provider,
+        model_id,
+        budgets,
+        run_context,
+        control_plane_extra_tools,
+        high_blast_tools,
+        skill_auto_commit,
+        policy_override,
+        cancel,
+    ))
+}
+
+#[allow(clippy::too_many_arguments)] // agent loop orchestration bundle
+async fn execute_agent_loop_inner<S, M>(
+    store: Arc<S>,
+    model: Arc<M>,
+    tools: Arc<dyn ToolRuntime>,
+    events: Arc<RunEventHub>,
+    active: Arc<Mutex<ActiveRunRegistry>>,
+    approvals: Arc<ApprovalBroker>,
+    run_id: RunId,
+    session_id: SessionId,
+    principal_id: keryx_domain::PrincipalId,
+    goal: String,
+    origin: RunOrigin,
+    provider: Option<String>,
+    model_id: Option<String>,
+    budgets: RunBudgets,
+    run_context: RunContextConfig,
+    control_plane_extra_tools: BTreeSet<String>,
+    high_blast_tools: HashSet<String>,
+    skill_auto_commit: bool,
+    policy_override: Option<Policy>,
+    cancel: CancellationToken,
 ) -> Result<(), AppError>
 where
-    S: SessionStore,
-    M: ModelProvider,
+    S: SessionStore + 'static,
+    M: ModelProvider + 'static,
 {
     // Origin-selected Policy template (fail closed for tools not on the allowlist),
     // or a frozen parent snapshot for Child Runs.
@@ -1185,7 +1370,14 @@ where
             .await
             .map_err(AppError::Store)?;
         // Catalog = registered ∩ Policy (model never sees tools it cannot invoke).
-        let tools_for_model = catalog_for_policy(&tools.catalog(), |name| policy.allows_tool(name));
+        // spawn_child_run is product-path orchestration (not a ToolRuntime adapter).
+        let mut tools_for_model =
+            catalog_for_policy(&tools.catalog(), |name| policy.allows_tool(name));
+        if policy.allows_tool("spawn_child_run")
+            && !tools_for_model.iter().any(|t| t.name == "spawn_child_run")
+        {
+            tools_for_model.push(spawn_child_run_tool_spec());
+        }
         let model_future = model.complete(ModelRequest {
             goal: goal.clone(),
             transcript: transcript.messages,
@@ -1445,6 +1637,23 @@ where
                     call.name,
                     origin.as_str()
                 )))
+            } else if call.name == "spawn_child_run" {
+                // Agent-facing Child Run spawn (ADR 0035 line 4): Policy-gated product path.
+                invoke_spawn_child_run_tool(
+                    Arc::clone(&store),
+                    Arc::clone(&model),
+                    Arc::clone(&tools),
+                    Arc::clone(&events),
+                    Arc::clone(&active),
+                    Arc::clone(&approvals),
+                    run_id,
+                    &call.arguments,
+                    &budgets,
+                    control_plane_extra_tools.clone(),
+                    high_blast_tools.clone(),
+                    skill_auto_commit,
+                )
+                .await
             } else if needs_approval {
                 match request_and_wait_approval(
                     store.as_ref(),

@@ -120,6 +120,7 @@ impl WorkerConfig {
                     "skill_load".into(),
                     "skill_manage".into(),
                     "run_terminal".into(),
+                    "spawn_child_run".into(),
                 ]
             });
 

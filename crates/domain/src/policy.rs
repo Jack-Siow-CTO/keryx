@@ -63,6 +63,8 @@ impl Policy {
                 "skill_load".into(),
                 "skill_manage".into(),
                 "run_terminal".into(),
+                // Agent-facing Child Run spawn (ADR 0035 line 4 / #79). Only root Runs may spawn.
+                "spawn_child_run".into(),
             ]),
         }
     }
@@ -143,6 +145,7 @@ mod tests {
         assert!(p.allows_tool("skills_list"));
         assert!(p.allows_tool("skill_load"));
         assert!(p.allows_tool("skill_manage"));
+        assert!(p.allows_tool("spawn_child_run"));
         assert!(!p.allows_tool("shell_exec"));
     }
 
@@ -169,6 +172,7 @@ mod tests {
             assert!(p.allows_tool("skills_list"), "{origin}");
             assert!(p.allows_tool("skill_load"), "{origin}");
             assert!(p.allows_tool("skill_manage"), "{origin}");
+            assert!(!p.allows_tool("spawn_child_run"), "{origin}");
             assert!(!p.allows_tool("shell_exec"), "{origin}");
         }
     }
