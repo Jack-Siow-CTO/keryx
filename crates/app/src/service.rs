@@ -44,6 +44,9 @@ pub struct ControlPlane<S, M> {
     control_plane_extra_tools: BTreeSet<String>,
     /// Config-declared high-blast tools (MCP or other) requiring Approval — no name heuristics.
     high_blast_tools: HashSet<String>,
+    /// When true, trusted control_plane origin may apply `skill_manage` without Approval.
+    /// Factory default is **OFF** (ADR 0035 / #69 / #76). Gateway origin never auto-commits.
+    skill_auto_commit: bool,
 }
 
 impl<S, M> ControlPlane<S, M>
@@ -90,6 +93,8 @@ where
             approvals: Arc::new(ApprovalBroker::new()),
             control_plane_extra_tools: BTreeSet::new(),
             high_blast_tools: HashSet::new(),
+            // Factory default OFF: learning-loop proposals are Approvals (#69 / #76).
+            skill_auto_commit: false,
         }
     }
 
@@ -110,6 +115,21 @@ where
     pub fn with_high_blast_tools(mut self, tools: impl IntoIterator<Item = String>) -> Self {
         self.high_blast_tools.extend(tools);
         self
+    }
+
+    /// Operator skill auto-commit for trusted control_plane origin only.
+    ///
+    /// Factory default is **OFF**. Gateway/schedule origin never auto-commits even when ON.
+    #[must_use]
+    pub fn with_skill_auto_commit(mut self, enabled: bool) -> Self {
+        self.skill_auto_commit = enabled;
+        self
+    }
+
+    /// Whether skill auto-commit is enabled (factory default false).
+    #[must_use]
+    pub fn skill_auto_commit(&self) -> bool {
+        self.skill_auto_commit
     }
 
     #[must_use]
@@ -379,6 +399,7 @@ where
         let run_context = self.run_context.clone();
         let control_plane_extra_tools = self.control_plane_extra_tools.clone();
         let high_blast_tools = self.high_blast_tools.clone();
+        let skill_auto_commit = self.skill_auto_commit;
         let run_id = run.id;
         let run_session = run.session_id;
         let run_origin = run.origin.clone();
@@ -402,6 +423,7 @@ where
                 run_context,
                 control_plane_extra_tools,
                 high_blast_tools,
+                skill_auto_commit,
                 None, // root: derive Policy from origin + extras
                 cancel,
             )
@@ -902,6 +924,7 @@ where
         let approvals = Arc::clone(&self.approvals);
         let control_plane_extra_tools = self.control_plane_extra_tools.clone();
         let high_blast_tools = self.high_blast_tools.clone();
+        let skill_auto_commit = self.skill_auto_commit;
         // Child: isolated transcript slice — no Soul re-attach (parent already has identity).
         let run_context = RunContextConfig::default();
         let child_id = child.id;
@@ -929,6 +952,7 @@ where
                 run_context,
                 control_plane_extra_tools,
                 high_blast_tools,
+                skill_auto_commit,
                 Some(child_policy),
                 cancel,
             )
@@ -1059,6 +1083,7 @@ async fn execute_agent_loop<S, M>(
     run_context: RunContextConfig,
     control_plane_extra_tools: BTreeSet<String>,
     high_blast_tools: HashSet<String>,
+    skill_auto_commit: bool,
     // Frozen Policy snapshot (Child Runs). When set, used instead of re-deriving
     // from origin + live Worker extras so children cannot gain tools mid-process.
     policy_override: Option<Policy>,
@@ -1379,7 +1404,7 @@ where
                 &protected_paths,
                 &run_context.workspace_roots,
             ) || is_high_blast_local_terminal(&call, &origin)
-                || (call.name == "skill_manage" && !origin.is_reduced_trust())
+                || skill_manage_needs_approval(&call, &origin, skill_auto_commit)
                 || high_blast_tools.contains(&call.name);
 
             let tool_outcome = if !policy.allows_tool(&call.name) {
@@ -1522,6 +1547,25 @@ fn is_high_blast_local_terminal(call: &crate::tools::ToolCall, origin: &RunOrigi
         .and_then(|v| v.as_str())
         .unwrap_or("local");
     backend == "local"
+}
+
+/// `skill_manage` is high-blast unless trusted auto-commit applies.
+///
+/// - Reduced origin (gateway/schedule): **always** Approval (never silent-write).
+/// - Control plane + auto-commit OFF (factory): Approval.
+/// - Control plane + auto-commit ON: write without Approval (trusted auto-apply).
+fn skill_manage_needs_approval(
+    call: &crate::tools::ToolCall,
+    origin: &RunOrigin,
+    skill_auto_commit: bool,
+) -> bool {
+    if call.name != "skill_manage" {
+        return false;
+    }
+    if origin.is_reduced_trust() {
+        return true;
+    }
+    !skill_auto_commit
 }
 
 /// True when a write-class tool targets a loaded Soul or Context file path.

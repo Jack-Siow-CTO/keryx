@@ -11,9 +11,9 @@ use keryx_gateway::{run_telegram_long_poll, ChatAllowlist};
 use keryx_model::{register_from_env, RegisteredProviders};
 use keryx_storage::SqliteSessionStore;
 use keryx_tools::{
-    build_mcp_runtimes, CompositeTools, HttpWebExtract, McpDoctorReport, McpRuntimeBundle,
-    MemoryTools, SystemExecRunner, TerminalTools, UnconfiguredWebSearch, WebTools,
-    WorkspaceFsTools,
+    build_mcp_runtimes, skills_root_doctor_status, CompositeTools, HttpWebExtract, McpDoctorReport,
+    McpRuntimeBundle, MemoryTools, SkillsRootDoctorKind, SkillsTools, SystemExecRunner,
+    TerminalTools, UnconfiguredWebSearch, WebTools, WorkspaceFsTools,
 };
 use std::collections::HashSet;
 use std::path::Path;
@@ -110,6 +110,9 @@ async fn run() -> Result<(), String> {
     if !mcp_bundle.high_blast.is_empty() {
         control = control.with_high_blast_tools(mcp_bundle.high_blast.clone());
     }
+    if config.skill_auto_commit {
+        control = control.with_skill_auto_commit(true);
+    }
     let control = Arc::new(control);
     // Keep MCP registry alive for stdio child lifetime / shutdown Drop.
     let _mcp_keep_alive = mcp_bundle.runtime.clone();
@@ -121,10 +124,7 @@ async fn run() -> Result<(), String> {
     let catalog = catalog_from_registered(&registered);
     // Keep a direct Arc for Gateways (HTTP holds its own clone via AppState).
     let control_for_gateway = Arc::clone(&control);
-    let skills_root = std::env::var("KERYX_SKILLS_ROOT")
-        .ok()
-        .map(std::path::PathBuf::from)
-        .or_else(|| Some(std::path::PathBuf::from("./skills")));
+    let skills_root = Some(config.skills_root.clone());
     let artifacts_dir = Some(config.data_dir.join("artifacts"));
     let state = AppState::with_providers(control, tokens, catalog)
         .with_console_paths(skills_root, artifacts_dir);
@@ -301,13 +301,23 @@ async fn doctor() -> Result<(), String> {
         println!("ok   Context files configured: {:?}", config.context_files);
     }
 
-    // v2 readiness surfaces
-    let skills = std::env::var("KERYX_SKILLS_ROOT").unwrap_or_else(|_| "./skills".into());
-    if std::path::Path::new(&skills).is_dir() {
-        println!("ok   skills root {skills}");
+    // Skills root: empty OK (soft-warn); missing/unreadable fails closed (#69 / #76).
+    let skills_status = skills_root_doctor_status(&config.skills_root);
+    match skills_status.kind {
+        SkillsRootDoctorKind::Ok => println!("ok   {}", skills_status.detail),
+        SkillsRootDoctorKind::Empty => {
+            println!("warn {}", skills_status.detail);
+            warn_count += 1;
+        }
+        SkillsRootDoctorKind::Missing | SkillsRootDoctorKind::Unreadable => {
+            println!("fail {}", skills_status.detail);
+            issues += 1;
+        }
+    }
+    if config.skill_auto_commit {
+        println!("ok   skill auto-commit ON (trusted control_plane only)");
     } else {
-        println!("warn skills root missing ({skills}) — create or set KERYX_SKILLS_ROOT");
-        warn_count += 1;
+        println!("ok   skill auto-commit OFF (factory default; proposals are Approvals)");
     }
     match std::env::var("KERYX_TELEGRAM_BOT_TOKEN") {
         Ok(t) if !t.is_empty() => println!("ok   Telegram Gateway token configured"),
@@ -498,7 +508,7 @@ fn build_tools(
         // backend selection still honors Run origin inside TerminalTools when
         // constructed with origin (here control_plane; reduced origins deny local).
         let mut term = TerminalTools::new(
-            allowed,
+            allowed.clone(),
             Arc::new(SystemExecRunner::new()),
             RunOrigin::ControlPlane,
         );
@@ -506,6 +516,21 @@ fn build_tools(
             term = term.with_cwd_roots(config.workspace_roots.clone());
         }
         composite = composite.with(term_names, Arc::new(term));
+    }
+
+    let skill_names: HashSet<String> = ["skills_list", "skill_load", "skill_manage"]
+        .into_iter()
+        .map(str::to_string)
+        .filter(|n| allowed.contains(n))
+        .collect();
+    if !skill_names.is_empty() {
+        composite = composite.with(
+            skill_names,
+            Arc::new(SkillsTools::new(
+                config.skills_root.clone(),
+                allowed.clone(),
+            )),
+        );
     }
 
     // MCP client tools: registered independently of KERYX_ALLOWED_TOOLS.

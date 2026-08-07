@@ -29,6 +29,10 @@ pub struct WorkerConfig {
     pub mcp_config_path: Option<PathBuf>,
     /// Extra exact tool names merged into control_plane Policy (`KERYX_POLICY_EXTRA_TOOLS`).
     pub policy_extra_tools: Vec<String>,
+    /// Skills package root (`name/SKILL.md`). Default `./skills`.
+    pub skills_root: PathBuf,
+    /// Trusted control_plane skill auto-commit. Factory default **OFF** (#69 / #76).
+    pub skill_auto_commit: bool,
 }
 
 impl WorkerConfig {
@@ -45,6 +49,8 @@ impl WorkerConfig {
     /// | `KERYX_DEFAULT_PROVIDER` | Real provider key when multiple are registered |
     /// | `KERYX_MCP_CONFIG` | Path to MCP servers JSON (static; restart to apply) |
     /// | `KERYX_POLICY_EXTRA_TOOLS` | Comma-separated exact tool names for control_plane Policy |
+    /// | `KERYX_SKILLS_ROOT` | Skills package root (default `./skills`) |
+    /// | `KERYX_SKILL_AUTO_COMMIT` | `1`/`true` enables trusted auto-apply (factory OFF) |
     /// | `OPENAI_*` / `XAI_*` / `CHATGPT_*` / `GROK_WEB_*` | Model provider secrets — see registry |
     pub fn from_env() -> Result<Self, String> {
         let bind = parse_bind(env::var("KERYX_BIND").ok())?;
@@ -109,6 +115,9 @@ impl WorkerConfig {
                     "memory_delete".into(),
                     "memory_search".into(),
                     "session_search".into(),
+                    "skills_list".into(),
+                    "skill_load".into(),
+                    "skill_manage".into(),
                     "run_terminal".into(),
                 ]
             });
@@ -148,6 +157,23 @@ impl WorkerConfig {
             })
             .unwrap_or_default();
 
+        let skills_root = env::var("KERYX_SKILLS_ROOT")
+            .ok()
+            .filter(|s| !s.is_empty())
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from("./skills"));
+
+        // Factory default OFF: only explicit true/1/yes/on enables trusted auto-apply.
+        let skill_auto_commit = env::var("KERYX_SKILL_AUTO_COMMIT")
+            .ok()
+            .map(|s| {
+                matches!(
+                    s.trim().to_ascii_lowercase().as_str(),
+                    "1" | "true" | "yes" | "on"
+                )
+            })
+            .unwrap_or(false);
+
         Ok(Self {
             bind,
             data_dir,
@@ -165,6 +191,8 @@ impl WorkerConfig {
             mcp_config,
             mcp_config_path,
             policy_extra_tools,
+            skills_root,
+            skill_auto_commit,
         })
     }
 

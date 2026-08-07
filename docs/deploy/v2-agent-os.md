@@ -8,8 +8,9 @@ Aligned with ADR 0012 and spec 0002. Extends v1 install without discarding SQLit
 |----------|---------|
 | `KERYX_SOUL_PATH` | Operator Soul document (soft-missing) |
 | `KERYX_CONTEXT_FILES` | Colon-separated workspace Context files |
-| `KERYX_SKILLS_ROOT` | Skills package root (`name/SKILL.md`) |
-| `KERYX_ALLOWED_TOOLS` | Comma list: workspace FS, web, memory, `run_terminal` (defaults match Worker compose) |
+| `KERYX_SKILLS_ROOT` | Skills package root (`name/SKILL.md`); empty OK; missing/unreadable fails doctor |
+| `KERYX_SKILL_AUTO_COMMIT` | Trusted control_plane auto-apply (`1`/`true`); factory **OFF**; gateway never silent-writes |
+| `KERYX_ALLOWED_TOOLS` | Comma list: workspace FS, web, memory, skills, `run_terminal` (defaults match Worker compose) |
 | `KERYX_TELEGRAM_BOT_TOKEN` | Telegram Gateway (fail closed if invalid) |
 | `KERYX_DOCKER_IMAGE` | Default Docker image for reduced-origin exec |
 | `KERYX_MCP_CONFIG` | Static MCP client servers JSON (restart to apply) — see [mcp-user-capabilities.md](./mcp-user-capabilities.md) |

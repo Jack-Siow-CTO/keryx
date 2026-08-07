@@ -2,6 +2,7 @@
 
 mod mcp;
 mod memory;
+mod skills;
 mod terminal;
 mod web;
 mod workspace;
@@ -13,6 +14,10 @@ pub use mcp::{
     McpServerHealth, McpSession, McpTransportConfig, MockMcpPeer, MCP_NAMESPACE_PREFIX,
 };
 pub use memory::MemoryTools;
+pub use skills::{
+    skills_root_doctor_status, validate_skill_name, SkillsRootDoctorKind, SkillsRootDoctorStatus,
+    SkillsTools,
+};
 pub use terminal::{
     ExecBackend, ExecBackendRunner, FixedExecRunner, SystemExecRunner, TerminalTools,
 };

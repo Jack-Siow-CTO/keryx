@@ -36,10 +36,13 @@ impl Policy {
     /// Default Policy for control-plane origin (trusted operator API).
     ///
     /// Matches tools the Worker can compose today (workspace FS, web, memory,
-    /// terminal). Does **not** auto-include discovered MCP tools.
+    /// skills, terminal). Does **not** auto-include discovered MCP tools.
     /// Operators add exact `mcp.<server_id>.<tool>` names via
     /// [`Policy::with_extra_tools`] / Worker `KERYX_POLICY_EXTRA_TOOLS`.
     /// Seam 1 tests opt in with `ControlPlane::with_control_plane_extra_tools`.
+    ///
+    /// `skill_manage` is allowed here but Approval-gated when skill auto-commit
+    /// is OFF (factory default) — see agent loop high-blast rules.
     #[must_use]
     pub fn control_plane_default() -> Self {
         Self {
@@ -56,6 +59,9 @@ impl Policy {
                 "memory_delete".into(),
                 "memory_search".into(),
                 "session_search".into(),
+                "skills_list".into(),
+                "skill_load".into(),
+                "skill_manage".into(),
                 "run_terminal".into(),
             ]),
         }
@@ -63,8 +69,10 @@ impl Policy {
 
     /// Reduced Policy for untrusted origins (`gateway:*`, `schedule`).
     ///
-    /// Read/search/web/memory-read only; no free Memory rewrite or high-blast tools.
+    /// Read/search/web/memory-read/skills-list-load + skill_manage **proposal** only.
     /// Memory mutations from reduced origin are denied (fail closed).
+    /// `skill_manage` never silent-writes: agent loop always requires Approval
+    /// for reduced origin (auto-commit does not apply).
     /// Terminal allowed only with Docker backend (enforced in tool adapter).
     /// **No MCP tools** by default (connect ≠ allow; gateways/cron cannot send mail).
     #[must_use]
@@ -78,6 +86,9 @@ impl Policy {
                 "memory_read".into(),
                 "memory_search".into(),
                 "session_search".into(),
+                "skills_list".into(),
+                "skill_load".into(),
+                "skill_manage".into(), // proposal only; Approval before write
                 "run_terminal".into(), // docker-only for reduced origin
                                        // no memory_write, no mcp.*
             ]),
@@ -129,6 +140,9 @@ mod tests {
         assert!(p.allows_tool("search_files"));
         assert!(p.allows_tool("web_search"));
         assert!(p.allows_tool("web_extract"));
+        assert!(p.allows_tool("skills_list"));
+        assert!(p.allows_tool("skill_load"));
+        assert!(p.allows_tool("skill_manage"));
         assert!(!p.allows_tool("shell_exec"));
     }
 
@@ -152,6 +166,9 @@ mod tests {
             assert!(p.allows_tool("memory_read"), "{origin}");
             assert!(p.allows_tool("memory_search"), "{origin}");
             assert!(p.allows_tool("session_search"), "{origin}");
+            assert!(p.allows_tool("skills_list"), "{origin}");
+            assert!(p.allows_tool("skill_load"), "{origin}");
+            assert!(p.allows_tool("skill_manage"), "{origin}");
             assert!(!p.allows_tool("shell_exec"), "{origin}");
         }
     }
