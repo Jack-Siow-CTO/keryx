@@ -4,6 +4,7 @@ import 'package:keryx_api/keryx_api.dart';
 
 import '../../widgets/console_chrome.dart';
 import '../auth/auth_controller.dart';
+import '../skills/skill_load.dart';
 import 'session_run_controller.dart';
 import 'sessions_controller.dart';
 
@@ -163,17 +164,30 @@ class _TranscriptPaneState extends ConsumerState<TranscriptPane> {
       );
     }
 
+    final loadedSkills = _loadedSkillsForSession(
+      _messages,
+      liveForSession,
+    );
+    final skillsHeader = loadedSkills.isEmpty ? 0 : 1;
     final loadingHeader = _loading ? 1 : 0;
     final durableCount = _messages.length;
     final liveCount = liveForSession.length;
-    final itemCount = loadingHeader + durableCount + liveCount;
+    final itemCount =
+        skillsHeader + loadingHeader + durableCount + liveCount;
 
     return ListView.builder(
       controller: _scroll,
       padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),
       itemCount: itemCount,
       itemBuilder: (context, i) {
-        if (_loading && i == 0) {
+        var offset = 0;
+        if (skillsHeader == 1) {
+          if (i == 0) {
+            return LoadedSkillsStrip(skillNames: loadedSkills);
+          }
+          offset += 1;
+        }
+        if (_loading && i == offset) {
           return const Padding(
             padding: EdgeInsets.all(8),
             child: Center(
@@ -185,20 +199,30 @@ class _TranscriptPaneState extends ConsumerState<TranscriptPane> {
             ),
           );
         }
-        final idx = i - loadingHeader;
+        final idx = i - offset - loadingHeader;
         if (idx < durableCount) {
           final m = _messages[idx];
           if (m.isTool) {
+            final toolName = m.tool?.name ?? 'tool';
+            final summary = m.tool?.summary ?? m.content;
+            final skillName = isSkillLoadTool(toolName)
+                ? skillNameFromLoadSignal(
+                    toolName: toolName,
+                    summary: summary,
+                  )
+                : null;
             return ActivityBlock(
               key: ValueKey('durable-${m.id}'),
               blockId: m.id,
-              title: m.tool?.name ?? 'tool',
-              status: m.tool?.status ?? '',
-              summary: m.tool?.summary ?? m.content,
-              looksLikeChild: _looksLikeChild(
-                m.tool?.name ?? '',
-                m.tool?.summary ?? m.content,
-              ),
+              title: skillName != null
+                  ? skillLoadActivityTitle(skillName)
+                  : toolName,
+              status: skillName != null && (m.tool?.status == 'ok')
+                  ? 'loaded'
+                  : (m.tool?.status ?? ''),
+              summary: summary,
+              looksLikeChild: _looksLikeChild(toolName, summary),
+              looksLikeSkill: skillName != null,
               expanded: _expanded.contains(m.id),
               onToggle: () => _toggleExpanded(m.id),
               artifactRefs: m.tool?.artifactRefs ?? const [],
@@ -208,6 +232,7 @@ class _TranscriptPaneState extends ConsumerState<TranscriptPane> {
           return _ProseMessage(message: m);
         }
         final live = liveForSession[idx - durableCount];
+        final liveIsSkill = live.title.startsWith('Skill');
         return ActivityBlock(
           key: ValueKey('live-${live.id}'),
           blockId: live.id,
@@ -215,6 +240,7 @@ class _TranscriptPaneState extends ConsumerState<TranscriptPane> {
           status: live.status,
           summary: live.summary,
           looksLikeChild: live.looksLikeChild,
+          looksLikeSkill: liveIsSkill,
           expanded: _expanded.contains(live.id),
           onToggle: () => _toggleExpanded(live.id),
           live: true,
@@ -226,6 +252,67 @@ class _TranscriptPaneState extends ConsumerState<TranscriptPane> {
   bool _looksLikeChild(String name, String summary) {
     return name.toLowerCase().contains('child') ||
         summary.toLowerCase().contains('child run');
+  }
+}
+
+/// Unique Skill packages loaded in durable Transcript and live activity (#82).
+List<String> _loadedSkillsForSession(
+  List<TranscriptMessage> messages,
+  List<LiveActivityItem> live,
+) {
+  final fromTranscript = loadedSkillsFromMessages(messages);
+  final seen = {...fromTranscript};
+  final out = [...fromTranscript];
+  for (final item in live) {
+    if (!item.title.startsWith('Skill')) continue;
+    if (item.status == 'error' || item.status == 'running') continue;
+    final name = skillNameFromLoadSignal(
+      summary: item.summary,
+      eventName: item.title,
+    );
+    if (name == null || name.isEmpty) continue;
+    if (seen.add(name)) out.add(name);
+  }
+  return out;
+}
+
+/// Header chips: Skills this Session/Run loaded (daily-use load indicators).
+class LoadedSkillsStrip extends StatelessWidget {
+  const LoadedSkillsStrip({super.key, required this.skillNames});
+
+  final List<String> skillNames;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 10),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            'Skills loaded',
+            style: theme.textTheme.labelSmall?.copyWith(
+              color: theme.colorScheme.onSurfaceVariant,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+          const SizedBox(height: 6),
+          Wrap(
+            spacing: 8,
+            runSpacing: 6,
+            children: [
+              for (final name in skillNames)
+                StatusPill(
+                  icon: Icons.extension_outlined,
+                  label: name,
+                  tone: StatusPillTone.ok,
+                ),
+            ],
+          ),
+        ],
+      ),
+    );
   }
 }
 
@@ -305,6 +392,7 @@ class ActivityBlock extends StatelessWidget {
     required this.looksLikeChild,
     required this.expanded,
     required this.onToggle,
+    this.looksLikeSkill = false,
     this.artifactRefs = const [],
     this.onOpenArtifact,
     this.live = false,
@@ -315,6 +403,7 @@ class ActivityBlock extends StatelessWidget {
   final String status;
   final String summary;
   final bool looksLikeChild;
+  final bool looksLikeSkill;
   final bool expanded;
   final VoidCallback onToggle;
   final List<String> artifactRefs;
@@ -324,6 +413,11 @@ class ActivityBlock extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final icon = looksLikeSkill
+        ? Icons.extension_outlined
+        : looksLikeChild
+            ? Icons.account_tree_outlined
+            : Icons.build_circle_outlined;
 
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 3),
@@ -349,11 +443,11 @@ class ActivityBlock extends StatelessWidget {
                     ),
                     const SizedBox(width: 6),
                     Icon(
-                      looksLikeChild
-                          ? Icons.account_tree_outlined
-                          : Icons.build_circle_outlined,
+                      icon,
                       size: 15,
-                      color: theme.colorScheme.onSurfaceVariant,
+                      color: looksLikeSkill
+                          ? const Color(0xFF1B7A4E)
+                          : theme.colorScheme.onSurfaceVariant,
                     ),
                     const SizedBox(width: 6),
                     Expanded(
@@ -375,7 +469,9 @@ class ActivityBlock extends StatelessWidget {
                     Text(
                       status,
                       style: theme.textTheme.labelSmall?.copyWith(
-                        color: theme.colorScheme.primary,
+                        color: looksLikeSkill
+                            ? const Color(0xFF1B7A4E)
+                            : theme.colorScheme.primary,
                         fontWeight: FontWeight.w600,
                       ),
                     ),
@@ -409,6 +505,18 @@ class ActivityBlock extends StatelessWidget {
                       padding: const EdgeInsets.only(left: 45),
                       child: Text(
                         'Child Run (read-only linkage — not a separate chat)',
+                        style: theme.textTheme.labelSmall?.copyWith(
+                          color: theme.colorScheme.onSurfaceVariant,
+                        ),
+                      ),
+                    ),
+                  ],
+                  if (looksLikeSkill) ...[
+                    const SizedBox(height: 6),
+                    Padding(
+                      padding: const EdgeInsets.only(left: 45),
+                      child: Text(
+                        'Skill package loaded into this Run (progressive disclosure)',
                         style: theme.textTheme.labelSmall?.copyWith(
                           color: theme.colorScheme.onSurfaceVariant,
                         ),

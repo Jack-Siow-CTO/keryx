@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:keryx_api/keryx_api.dart';
 
 import '../auth/auth_controller.dart';
+import '../skills/skill_load.dart';
 import 'sessions_controller.dart';
 
 /// Kind of collapsible live activity in the open thread (ADR 0015 / #75).
@@ -36,6 +37,8 @@ final class LiveActivityItem {
   String get stripLabel {
     switch (kind) {
       case LiveActivityKind.tool:
+        // Skill load titles already start with "Skill · …" (#82).
+        if (title.startsWith('Skill')) return '$title · $status';
         return 'Tool · $title · $status';
       case LiveActivityKind.childRun:
         return 'Child Run · $status';
@@ -70,6 +73,21 @@ List<LiveActivityItem>? applyLiveActivity(
 ) {
   if (event.isToolStarted) {
     final name = event.toolName ?? 'tool';
+    if (isSkillLoadTool(name)) {
+      final skill = skillNameFromLoadSignal(eventName: name);
+      return _upsert(
+        current,
+        LiveActivityItem(
+          id: 'tool:skill_load:${skill ?? 'unknown'}',
+          kind: LiveActivityKind.tool,
+          title: skillLoadActivityTitle(skill),
+          status: 'running',
+          summary: skill == null
+              ? 'Skill load started'
+              : 'Loading Skill package $skill',
+        ),
+      );
+    }
     return _upsert(
       current,
       LiveActivityItem(
@@ -83,6 +101,24 @@ List<LiveActivityItem>? applyLiveActivity(
   }
   if (event.isToolFinished) {
     final name = event.toolName ?? 'tool';
+    if (isSkillLoadTool(name)) {
+      final skill = skillNameFromLoadSignal(eventName: name);
+      final failed = name.toLowerCase().contains('error=');
+      return _upsert(
+        current,
+        LiveActivityItem(
+          id: 'tool:skill_load:${skill ?? 'unknown'}',
+          kind: LiveActivityKind.tool,
+          title: skillLoadActivityTitle(skill),
+          status: failed ? 'error' : 'loaded',
+          summary: failed
+              ? 'Skill load failed'
+              : (skill == null
+                  ? 'Skill loaded'
+                  : 'Loaded Skill package $skill'),
+        ),
+      );
+    }
     return _upsert(
       current,
       LiveActivityItem(
