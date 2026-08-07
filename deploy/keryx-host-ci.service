@@ -6,10 +6,12 @@
 #   systemctl --user daemon-reload
 #   systemctl --user enable --now keryx-host-ci.timer
 #
-# Scenarios may stay red until product tickets land; shell must exist.
-# Set KERYX_HOST_CI_STRICT=1 to fail on Telegram / Schedule host scenarios.
+# Required host suite (ADR 0035 / #80): L4/L5, Telegram Away Approvals, Schedule
+# always-on ticker, provider diagnostic. No SKIP-as-pass.
 # After a second tailnet node proves Edge :8443 health + auth challenge:
 #   export KERYX_EDGE_SECOND_NODE_OK=1  (in ~/.config/keryx/env)
+# Optional: write ~/.local/share/keryx/host-ci/second-node-proof.txt with
+#   "health HTTP 200" and "sessions unauth HTTP 401" lines.
 
 [Unit]
 Description=Keryx daily-use host CI job (ADR 0035)
