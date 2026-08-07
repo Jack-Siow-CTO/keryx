@@ -8,6 +8,7 @@ import 'package:keryx_console/features/sessions/session_detail.dart';
 import 'package:keryx_console/features/sessions/session_run_controller.dart';
 import 'package:keryx_console/features/sessions/sessions_controller.dart';
 import 'package:keryx_console/features/sessions/sticky_approval.dart';
+import 'package:keryx_console/features/sessions/transcript_pane.dart';
 import 'package:keryx_console/features/shell/messaging_shell.dart';
 import 'package:keryx_console/theme/keryx_theme.dart';
 
@@ -62,6 +63,9 @@ class FakeSessionRunController extends SessionRunController {
 
   @override
   Future<void> syncFromSession(SessionSummary? session) async {}
+
+  @override
+  Future<void> reconnect() async {}
 
   @override
   Future<void> startRun(
@@ -270,7 +274,7 @@ void main() {
 
   group('Needs you', () {
     testWidgets('renders Inbox projection items', (tester) async {
-      final item = InboxItem(
+      const item = InboxItem(
         id: 'i1',
         kind: 'approval_pending',
         sessionId: 's1',
@@ -302,18 +306,18 @@ void main() {
   group('layered timeline', () {
     testWidgets('prose and tool activity render distinctly', (tester) async {
       // Presentation-level: build message widgets via TranscriptMessage models.
-      final prose = TranscriptMessage(
+      const prose = TranscriptMessage(
         id: 'm1',
         role: 'assistant',
         content: 'Here is the answer',
         createdAt: 100,
       );
-      final tool = TranscriptMessage(
+      const tool = TranscriptMessage(
         id: 'm2',
         role: 'tool',
         content: 'done',
         createdAt: 101,
-        tool: const ToolCompact(
+        tool: ToolCompact(
           name: 'workspace_read',
           status: 'ok',
           summary: 'read file',
@@ -324,6 +328,27 @@ void main() {
       expect(prose.isTool, isFalse);
       expect(tool.isTool, isTrue);
       expect(tool.tool?.name, 'workspace_read');
+
+      // Collapsible activity is first-class in the timeline (not status-strip only).
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: KeryxTheme.light(),
+          home: Scaffold(
+            body: ActivityBlock(
+              blockId: tool.id,
+              title: tool.tool!.name,
+              status: tool.tool!.status,
+              summary: tool.tool!.summary,
+              looksLikeChild: false,
+              expanded: false,
+              onToggle: () {},
+            ),
+          ),
+        ),
+      );
+      expect(find.text('workspace_read'), findsOneWidget);
+      expect(find.text('ok'), findsOneWidget);
+      expect(find.text('read file'), findsOneWidget);
     });
   });
 

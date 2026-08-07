@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -25,14 +27,30 @@ class SessionDetailPane extends ConsumerStatefulWidget {
   ConsumerState<SessionDetailPane> createState() => _SessionDetailPaneState();
 }
 
-class _SessionDetailPaneState extends ConsumerState<SessionDetailPane> {
+class _SessionDetailPaneState extends ConsumerState<SessionDetailPane>
+    with WidgetsBindingObserver {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       final s = ref.read(sessionsControllerProvider).selected;
       ref.read(sessionRunControllerProvider.notifier).syncFromSession(s);
     });
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  /// After background / kill / network blip: reload Session truth + SSE resubscribe.
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      unawaited(ref.read(sessionRunControllerProvider.notifier).reconnect());
+    }
   }
 
   @override
@@ -130,9 +148,7 @@ class _SessionDetailPaneState extends ConsumerState<SessionDetailPane> {
                   session.activeRootRun?.goal ??
                   '',
               // Prefer human activity lines; never fall back to raw event noise.
-              activitySnippet: runState.activity.isNotEmpty
-                  ? runState.activity.last
-                  : null,
+              activitySnippet: runState.lastActivitySnippet,
             ),
           Expanded(
             child: SessionConversationBody(

@@ -21,6 +21,23 @@ void main() {
     expect(e2.isTerminal, isTrue);
   });
 
+  test('RunEvent exposes tool and Child-Run activity fields', () {
+    const toolChunk = 'event: tool.started\n'
+        'data: {"run_id":"r1","seq":1,"kind":{"type":"tool_started","payload":{"name":"workspace_read"}}}\n'
+        '\n'
+        'event: child_run.started\n'
+        'data: {"run_id":"r1","seq":2,"kind":{"type":"child_run_started","payload":{"child_run_id":"c1","goal":"scan"}}}\n'
+        '\n';
+    final frames = SseParser().push(toolChunk);
+    final tool = RunEvent.fromSse(frames[0]);
+    expect(tool.isToolStarted, isTrue);
+    expect(tool.toolName, 'workspace_read');
+    final child = RunEvent.fromSse(frames[1]);
+    expect(child.isChildRunStarted, isTrue);
+    expect(child.childRunId, 'c1');
+    expect(child.childRunGoal, 'scan');
+  });
+
   test('cancelAndRerun is pure client composition of cancel + start paths', () {
     // Structural: client exposes cancelAndRerun — shipped method must exist.
     expect(KeryxApiClient, isNotNull);

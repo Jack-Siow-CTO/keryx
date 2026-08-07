@@ -111,15 +111,109 @@ final class RunEvent {
   }
 
   String? get toolName {
-    final k = raw['kind'];
-    if (k is Map) {
-      final t = k['type'];
-      if (t == 'tool_started' || t == 'tool_finished') {
-        final p = k['payload'];
-        if (p is Map && p['name'] is String) return p['name'] as String;
-      }
+    final p = _kindPayload;
+    if (p == null) return null;
+    final t = type.toLowerCase().replaceAll('.', '_');
+    if (t == 'tool_started' || t == 'tool_finished') {
+      final name = p['name'];
+      if (name is String && name.isNotEmpty) return name;
     }
     return null;
+  }
+
+  bool get isToolStarted {
+    final t = type.toLowerCase().replaceAll('.', '_');
+    return t == 'tool_started';
+  }
+
+  bool get isToolFinished {
+    final t = type.toLowerCase().replaceAll('.', '_');
+    return t == 'tool_finished';
+  }
+
+  bool get isChildRunStarted {
+    final t = type.toLowerCase().replaceAll('.', '_');
+    return t == 'child_run_started';
+  }
+
+  bool get isChildRunFinished {
+    final t = type.toLowerCase().replaceAll('.', '_');
+    return t == 'child_run_finished';
+  }
+
+  bool get isApprovalWaiting {
+    final t = type.toLowerCase().replaceAll('.', '_');
+    return t == 'approval_waiting';
+  }
+
+  bool get isApprovalResolved {
+    final t = type.toLowerCase().replaceAll('.', '_');
+    return t == 'approval_resolved';
+  }
+
+  String? get childRunId {
+    final p = _kindPayload;
+    if (p == null) return null;
+    final id = p['child_run_id'];
+    return id is String && id.isNotEmpty ? id : null;
+  }
+
+  String? get childRunGoal {
+    final p = _kindPayload;
+    if (p == null) return null;
+    final g = p['goal'];
+    return g is String ? g : null;
+  }
+
+  String? get childRunTerminalStatus {
+    final p = _kindPayload;
+    if (p == null) return null;
+    final s = p['status'];
+    return s is String ? s : null;
+  }
+
+  String? get approvalAction {
+    final p = _kindPayload;
+    if (p == null) return null;
+    final a = p['action'];
+    return a is String ? a : null;
+  }
+
+  String? get approvalSummary {
+    final p = _kindPayload;
+    if (p == null) return null;
+    final s = p['summary'];
+    return s is String ? s : null;
+  }
+
+  String? get approvalDecision {
+    final p = _kindPayload;
+    if (p == null) return null;
+    final d = p['decision'];
+    return d is String ? d : null;
+  }
+
+  String? get budgetMessage {
+    final p = _kindPayload;
+    if (p == null) return null;
+    final m = p['message'];
+    return m is String ? m : null;
+  }
+
+  String? get failureReason {
+    final p = _kindPayload;
+    if (p == null) return null;
+    final r = p['reason'];
+    return r is String ? r : null;
+  }
+
+  Map<String, dynamic>? get _kindPayload {
+    final k = raw['kind'];
+    if (k is! Map) return null;
+    final p = k['payload'];
+    if (p is Map) return Map<String, dynamic>.from(p);
+    // Some payloads are inlined beside type under kind.
+    return Map<String, dynamic>.from(k);
   }
 
   factory RunEvent.fromSse(SseFrame frame) {

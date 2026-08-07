@@ -10,6 +10,7 @@ import 'sessions_controller.dart';
 /// Layered thread timeline from durable Worker Transcript (ADR 0015).
 ///
 /// Prose = first-class messages; tools/Child-Run/status = collapsible activity.
+/// Live Run activity (same shapes) sits after durable rows while a Run is open.
 /// Not flat bubble spam of every event; not default Chat | Activity tabs.
 class TranscriptPane extends ConsumerStatefulWidget {
   const TranscriptPane({
@@ -31,7 +32,7 @@ class _TranscriptPaneState extends ConsumerState<TranscriptPane> {
   String? _nextBefore;
   bool _loading = false;
   String? _error;
-  final Set<String> _expandedTools = {};
+  final Set<String> _expanded = {};
 
   @override
   void initState() {
@@ -46,6 +47,7 @@ class _TranscriptPaneState extends ConsumerState<TranscriptPane> {
     if (oldWidget.sessionId != widget.sessionId) {
       _messages.clear();
       _nextBefore = null;
+      _expanded.clear();
       _loadInitial();
     }
   }
@@ -121,8 +123,23 @@ class _TranscriptPaneState extends ConsumerState<TranscriptPane> {
     }
   }
 
+  void _toggleExpanded(String id) {
+    setState(() {
+      if (_expanded.contains(id)) {
+        _expanded.remove(id);
+      } else {
+        _expanded.add(id);
+      }
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
+    final runState = ref.watch(sessionRunControllerProvider);
+    final liveForSession = runState.boundSessionId == widget.sessionId
+        ? runState.liveActivity
+        : const <LiveActivityItem>[];
+
     if (_error != null && _messages.isEmpty) {
       return ConsoleEmptyState(
         icon: Icons.error_outline,
@@ -134,10 +151,10 @@ class _TranscriptPaneState extends ConsumerState<TranscriptPane> {
         ),
       );
     }
-    if (_loading && _messages.isEmpty) {
+    if (_loading && _messages.isEmpty && liveForSession.isEmpty) {
       return const ConsoleLoader(label: 'Loading Transcript…');
     }
-    if (_messages.isEmpty) {
+    if (_messages.isEmpty && liveForSession.isEmpty) {
       return const ConsoleEmptyState(
         icon: Icons.chat_bubble_outline,
         title: 'No messages yet',
@@ -146,10 +163,15 @@ class _TranscriptPaneState extends ConsumerState<TranscriptPane> {
       );
     }
 
+    final loadingHeader = _loading ? 1 : 0;
+    final durableCount = _messages.length;
+    final liveCount = liveForSession.length;
+    final itemCount = loadingHeader + durableCount + liveCount;
+
     return ListView.builder(
       controller: _scroll,
       padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),
-      itemCount: _messages.length + (_loading ? 1 : 0),
+      itemCount: itemCount,
       itemBuilder: (context, i) {
         if (_loading && i == 0) {
           return const Padding(
@@ -163,27 +185,47 @@ class _TranscriptPaneState extends ConsumerState<TranscriptPane> {
             ),
           );
         }
-        final idx = _loading ? i - 1 : i;
-        final m = _messages[idx];
-        if (m.isTool) {
-          return _ActivityBlock(
-            message: m,
-            expanded: _expandedTools.contains(m.id),
-            onToggle: () {
-              setState(() {
-                if (_expandedTools.contains(m.id)) {
-                  _expandedTools.remove(m.id);
-                } else {
-                  _expandedTools.add(m.id);
-                }
-              });
-            },
-            onOpenArtifact: widget.onOpenArtifact,
-          );
+        final idx = i - loadingHeader;
+        if (idx < durableCount) {
+          final m = _messages[idx];
+          if (m.isTool) {
+            return ActivityBlock(
+              key: ValueKey('durable-${m.id}'),
+              blockId: m.id,
+              title: m.tool?.name ?? 'tool',
+              status: m.tool?.status ?? '',
+              summary: m.tool?.summary ?? m.content,
+              looksLikeChild: _looksLikeChild(
+                m.tool?.name ?? '',
+                m.tool?.summary ?? m.content,
+              ),
+              expanded: _expanded.contains(m.id),
+              onToggle: () => _toggleExpanded(m.id),
+              artifactRefs: m.tool?.artifactRefs ?? const [],
+              onOpenArtifact: widget.onOpenArtifact,
+            );
+          }
+          return _ProseMessage(message: m);
         }
-        return _ProseMessage(message: m);
+        final live = liveForSession[idx - durableCount];
+        return ActivityBlock(
+          key: ValueKey('live-${live.id}'),
+          blockId: live.id,
+          title: live.title,
+          status: live.status,
+          summary: live.summary,
+          looksLikeChild: live.looksLikeChild,
+          expanded: _expanded.contains(live.id),
+          onToggle: () => _toggleExpanded(live.id),
+          live: true,
+        );
       },
     );
+  }
+
+  bool _looksLikeChild(String name, String summary) {
+    return name.toLowerCase().contains('child') ||
+        summary.toLowerCase().contains('child run');
   }
 }
 
@@ -251,33 +293,44 @@ class _ProseMessage extends StatelessWidget {
 }
 
 /// Collapsible tool / Child-Run / status activity in the same timeline.
-class _ActivityBlock extends StatelessWidget {
-  const _ActivityBlock({
-    required this.message,
+///
+/// Used for durable Transcript tool rows and live Run activity (#75).
+class ActivityBlock extends StatelessWidget {
+  const ActivityBlock({
+    super.key,
+    required this.blockId,
+    required this.title,
+    required this.status,
+    required this.summary,
+    required this.looksLikeChild,
     required this.expanded,
     required this.onToggle,
+    this.artifactRefs = const [],
     this.onOpenArtifact,
+    this.live = false,
   });
 
-  final TranscriptMessage message;
+  final String blockId;
+  final String title;
+  final String status;
+  final String summary;
+  final bool looksLikeChild;
   final bool expanded;
   final VoidCallback onToggle;
+  final List<String> artifactRefs;
   final ValueChanged<String>? onOpenArtifact;
+  final bool live;
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final tool = message.tool;
-    final name = tool?.name ?? 'tool';
-    final status = tool?.status ?? '';
-    final summary = tool?.summary ?? message.content;
-    final looksLikeChild = name.toLowerCase().contains('child') ||
-        summary.toLowerCase().contains('child run');
 
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 3),
       child: Material(
-        color: theme.colorScheme.surfaceContainerLow,
+        color: live
+            ? theme.colorScheme.primaryContainer.withValues(alpha: 0.35)
+            : theme.colorScheme.surfaceContainerLow,
         borderRadius: BorderRadius.circular(10),
         child: InkWell(
           borderRadius: BorderRadius.circular(10),
@@ -305,10 +358,20 @@ class _ActivityBlock extends StatelessWidget {
                     const SizedBox(width: 6),
                     Expanded(
                       child: Text(
-                        name,
+                        title,
                         style: theme.textTheme.titleSmall,
                       ),
                     ),
+                    if (live) ...[
+                      Text(
+                        'live',
+                        style: theme.textTheme.labelSmall?.copyWith(
+                          color: theme.colorScheme.primary,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                    ],
                     Text(
                       status,
                       style: theme.textTheme.labelSmall?.copyWith(
@@ -352,14 +415,14 @@ class _ActivityBlock extends StatelessWidget {
                       ),
                     ),
                   ],
-                  if (tool != null && tool.artifactRefs.isNotEmpty) ...[
+                  if (artifactRefs.isNotEmpty) ...[
                     const SizedBox(height: 8),
                     Padding(
                       padding: const EdgeInsets.only(left: 45),
                       child: Wrap(
                         spacing: 8,
                         children: [
-                          for (final refId in tool.artifactRefs)
+                          for (final refId in artifactRefs)
                             ActionChip(
                               avatar: const Icon(Icons.attach_file, size: 14),
                               label: Text(
@@ -412,6 +475,10 @@ class _SessionConversationBodyState
       if (prevStatus == 'active' &&
           nextStatus != null &&
           nextStatus != 'active') {
+        _paneKey.currentState?.reloadFromWorker();
+      }
+      // Resume / SSE reconnect: reload durable Transcript from Worker.
+      if (prev != null && next.reconnectEpoch > prev.reconnectEpoch) {
         _paneKey.currentState?.reloadFromWorker();
       }
     });
